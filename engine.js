@@ -51,8 +51,9 @@ Engine.tryPlay = function(x, y) {
   if (board[y][x] !== 0) return { ok: false, reason: 'Occupied' };
 
   // Snapshot for rollback
-  const prev = board[y].map((_, yy) => board[yy].slice());
+  const prevBoard = board.map(row => row.slice());
   const prevToMove = toMove;
+  const prevSeen = new Set(Util.seen);
 
   board[y][x] = toMove;
 
@@ -78,19 +79,21 @@ Engine.tryPlay = function(x, y) {
   // Suicide check
   const myGroup = Engine.collectGroupAndLiberties(x, y);
   if (myGroup.liberties === 0) {
-    board = prev;
+    board = prevBoard;
     toMove = prevToMove;
+    Util.seen = prevSeen;
     return { ok: false, reason: 'Suicide' };
   }
 
   // Switch player
   toMove = Util.other(toMove);
 
-  // Superko check
+  // Superko check (position *with next player to move*)
   const h = Util.hashPosition(toMove);
   if (Util.seen.has(h)) {
-    board = prev;
+    board = prevBoard;
     toMove = prevToMove;
+    Util.seen = prevSeen;
     return { ok: false, reason: 'Superko' };
   }
 
@@ -103,7 +106,7 @@ Engine.pass = function() {
   Util.seen.add(Util.hashPosition(toMove));
   Util.setTurnUI();
   Util.setStatus('Pass');
-  requestRender();
+  Render.requestRender();
 }
 
 Engine.reset = function(n = N) {
@@ -116,5 +119,5 @@ Engine.reset = function(n = N) {
   Util.rememberPosition();
   Util.setTurnUI();
   Util.setStatus('Ready');
-  requestRender();
+  Render.requestRender();
 }
