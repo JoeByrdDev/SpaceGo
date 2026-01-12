@@ -39,7 +39,6 @@
 
   // Render cache
   let lastGradientH = -1;
-  let bgGradient = null;
 
   // --- Utilities ---
   function clampInt(v, lo, hi) {
@@ -66,12 +65,7 @@
   canvas.height = Math.floor(cssH * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  if (Math.floor(viewH) !== lastGradientH) {
-    lastGradientH = Math.floor(viewH);
-    bgGradient = ctx.createLinearGradient(0, 0, 0, viewH);
-    bgGradient.addColorStop(0, '#142031');
-    bgGradient.addColorStop(1, '#0f1825');
-  }
+
 }
 
   function setStatus(text) { statusPill.textContent = text; }
@@ -230,7 +224,7 @@
     ctx.fillStyle = '#0b0d10';
     ctx.fillRect(0, 0, viewW, viewH);
 
-    ctx.fillStyle = bgGradient || '#0f1825';
+    ctx.fillStyle = '#364357';
     ctx.fillRect(0, 0, viewW, viewH);
 
     // Visible world bounds in grid units
