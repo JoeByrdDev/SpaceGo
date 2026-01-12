@@ -1,15 +1,19 @@
+// engine.js
 window.Engine = window.Engine || {};
 
-Engine.neighbors = function(x, y) {
+let scoreResult = null;
+Engine.getScoreResult = () => scoreResult;
+
+Engine.neighbors = function (x, y) {
   return [
     [Util.wrap(x + 1), y],
     [Util.wrap(x - 1), y],
     [x, Util.wrap(y + 1)],
     [x, Util.wrap(y - 1)],
   ];
-}
+};
 
-Engine.collectGroupAndLiberties = function(x, y) {
+Engine.collectGroupAndLiberties = function (x, y) {
   const color = board[y][x];
   const stack = [[x, y]];
   const visited = new Set();
@@ -40,18 +44,28 @@ Engine.collectGroupAndLiberties = function(x, y) {
   }
 
   return { color, stones, liberties: libset.size };
-}
+};
 
-Engine.removeStones = function(stones) {
+Engine.removeStones = function (stones) {
   for (const [x, y] of stones) board[y][x] = 0;
-}
+};
 
-Engine.tryPlay = function(x, y) {
-  x = Util.wrap(x); y = Util.wrap(y);
+// Absolute wrapper (UI speaks absolute)
+Engine.tryPlayAbs = function (ax, ay) {
+  const { bx, by } = Util.absToBase(ax, ay);
+  return Engine.tryPlayBase(bx, by);
+};
+
+// Base engine (rules speak wrapped base coords)
+Engine.tryPlayBase = function (x, y) {
+  if (phase !== 'play') return { ok: false, reason: 'Scoring' };
+  x = Util.wrap(x);
+  y = Util.wrap(y);
+
   if (board[y][x] !== 0) return { ok: false, reason: 'Occupied' };
 
   // Snapshot for rollback
-  const prevBoard = board.map(row => row.slice());
+  const prevBoard = board.map((row) => row.slice());
   const prevToMove = toMove;
   const prevSeen = new Set(Util.seen);
 
@@ -82,42 +96,155 @@ Engine.tryPlay = function(x, y) {
     board = prevBoard;
     toMove = prevToMove;
     Util.seen = prevSeen;
+    Util._syncGlobals();
     return { ok: false, reason: 'Suicide' };
   }
 
   // Switch player
   toMove = Util.other(toMove);
+  Util._syncGlobals();
 
-  // Superko check (position *with next player to move*)
+  // Superko check (position with next player to move)
   const h = Util.hashPosition(toMove);
   if (Util.seen.has(h)) {
     board = prevBoard;
     toMove = prevToMove;
     Util.seen = prevSeen;
+    Util._syncGlobals();
     return { ok: false, reason: 'Superko' };
   }
 
   Util.seen.add(h);
+  
+  // if move succeeds:
+  passStreak = 0;
   return { ok: true, captured };
-}
+};
 
-Engine.pass = function() {
+Engine.pass = function () {
+  if (phase !== 'play') return;
+
   toMove = Util.other(toMove);
   Util.seen.add(Util.hashPosition(toMove));
   Util.setTurnUI();
+
+  passStreak++;
+  if (passStreak >= 2) {
+    Engine.enterScoring();
+    return;
+  }
+
   Util.setStatus('Pass');
   Render.requestRender();
-}
+};
 
-Engine.reset = function(n = N) {
-  N = n;
+Engine.reset = function (n = N) {
+  Util.setBoardSize(n);
   board = Util.makeBoard(N);
-  toMove = 1;
-  camWX = (N - 1) / 2;
-  camWY = (N - 1) / 2;
+  Util.setToMove(1);
+  Util.setCameraAbs((N - 1) / 2, (N - 1) / 2);
+
   Util.seen = new Set();
   Util.rememberPosition();
+
   Util.setTurnUI();
+  phase = 'play';
+  passStreak = 0;
   Util.setStatus('Ready');
   Render.requestRender();
-}
+};
+
+// ---- scoring state ----
+let phase = 'play';     // 'play' | 'scoring'
+let passStreak = 0;
+
+Engine.getPhase = () => phase;
+
+Engine.enterScoring = function() {
+  phase = 'scoring';
+  scoreResult = Engine.computeScore();
+
+  const s = scoreResult;
+  Util.setStatus(
+    `Scoring — B:${s.blackTotal} (S${s.blackStones}+T${s.blackTerritory}) ` +
+    `W:${s.whiteTotal} (S${s.whiteStones}+T${s.whiteTerritory})`
+  );
+
+  Render.requestRender();
+};
+
+Engine.computeScore = function() {
+  let blackStones = 0, whiteStones = 0;
+  let blackTerritory = 0, whiteTerritory = 0, neutral = 0;
+  const ownership = Array.from({ length: N }, () => Array(N).fill(0));
+
+  // count stones
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const v = board[y][x];
+      if (v === 1) blackStones++;
+      else if (v === 2) whiteStones++;
+    }
+  }
+
+  // territory via empty-region flood fill
+  const visited = new Set();
+  const key = (x, y) => x + ',' + y;
+
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      if (board[y][x] !== 0) continue;
+      const k0 = key(x, y);
+      if (visited.has(k0)) continue;
+
+      // BFS region
+      const q = [[x, y]];
+const region = [];
+visited.add(k0);
+
+let regionSize = 0;
+const border = new Set();
+
+      while (q.length) {
+        const [cx, cy] = q.pop();
+region.push([cx, cy]);
+regionSize++;
+
+        for (const [nx, ny] of Engine.neighbors(cx, cy)) {
+          const v = board[ny][nx];
+          if (v === 0) {
+            const k = key(nx, ny);
+            if (!visited.has(k)) {
+              visited.add(k);
+              q.push([nx, ny]);
+            }
+          } else {
+            border.add(v); // 1 or 2
+          }
+        }
+      }
+
+      if (border.size === 1) {
+		const only = border.values().next().value;
+		if (only === 1) blackTerritory += regionSize;
+		else whiteTerritory += regionSize;
+
+		// mark ownership
+		for (const [rx, ry] of region) {
+			ownership[ry][rx] = only;
+		}
+	  } else {
+		neutral += regionSize;
+	  }
+    }
+  }
+
+  return {
+    blackStones, whiteStones,
+    blackTerritory, whiteTerritory,
+    neutral,
+	ownership,
+    blackTotal: blackStones + blackTerritory,
+    whiteTotal: whiteStones + whiteTerritory,
+  };
+};

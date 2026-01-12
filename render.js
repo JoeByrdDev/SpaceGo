@@ -1,31 +1,38 @@
+// render.js
 window.Render = window.Render || {};
 
-Render.requestRender = function() {
+Render.requestRender = function () {
   if (rafPending) return;
   rafPending = true;
+  Util._syncGlobals();
+
   requestAnimationFrame(() => {
     rafPending = false;
+    Util._syncGlobals();
     Render.drawOnce();
   });
-}
+};
 
-Render.drawOnce = function() {
+Render.drawOnce = function () {
   // Background
   ctx.clearRect(0, 0, viewW, viewH);
   ctx.fillStyle = '#475770';
   ctx.fillRect(0, 0, viewW, viewH);
 
-  // Visible world bounds in grid units
-  const left = camWX - (viewW / 2 + margin) / cell;
-  const right = camWX + (viewW / 2 + margin) / cell;
-  const top = camWY - (viewH / 2 + margin) / cell;
-  const bottom = camWY + (viewH / 2 + margin) / cell;
+  // Visible abs bounds in grid units
+  const leftA = camAX - (viewW / 2 + margin) / cell;
+  const rightA = camAX + (viewW / 2 + margin) / cell;
+  const topA = camAY - (viewH / 2 + margin) / cell;
+  const bottomA = camAY + (viewH / 2 + margin) / cell;
 
-  Render.drawGrid(left, right, top, bottom);
-  Render.drawStones(left, right, top, bottom);
+  Render.drawGridAbs(leftA, rightA, topA, bottomA);
+  if (Engine.getPhase && Engine.getPhase() === 'scoring') {
+  Render.drawTerritoryAbs(leftA, rightA, topA, bottomA);
+}
+  Render.drawStonesAbs(leftA, rightA, topA, bottomA);
 
-  // Hover indicator, repeated like stones (cheap 3x3)
-  if (mouse.over) Render.drawHover(mouse.over.gx, mouse.over.gy);
+  // Hover indicator (absolute), repeated by +/-N
+  if (mouse.over) Render.drawHoverAbs(mouse.over.ax, mouse.over.ay);
 
   // Subtle center crosshair
   ctx.strokeStyle = 'rgba(233,238,245,0.08)';
@@ -36,36 +43,36 @@ Render.drawOnce = function() {
   ctx.moveTo(viewW / 2, viewH / 2 - 10);
   ctx.lineTo(viewW / 2, viewH / 2 + 10);
   ctx.stroke();
-}
+};
 
-Render.drawGrid = function(left, right, top, bottom) {
-  const x0 = Math.floor(left);
-  const x1 = Math.ceil(right);
-  const y0 = Math.floor(top);
-  const y1 = Math.ceil(bottom);
+Render.drawGridAbs = function (leftA, rightA, topA, bottomA) {
+  const x0 = Math.floor(leftA);
+  const x1 = Math.ceil(rightA);
+  const y0 = Math.floor(topA);
+  const y1 = Math.ceil(bottomA);
 
-  // Regular grid
+  // Regular grid (non-seam)
   ctx.strokeStyle = 'rgba(233,238,245,0.12)';
   ctx.lineWidth = 1;
 
-  // Vertical regular lines
+  // Vertical regular lines: ax where ax % N != 0
   ctx.beginPath();
-  for (let gx = x0; gx <= x1; gx++) {
-    if (gx % N === 0) continue; // seam lines drawn thicker below
-    const p1 = Util.worldToScreen(gx, y0);
-    const p2 = Util.worldToScreen(gx, y1);
+  for (let ax = x0; ax <= x1; ax++) {
+    if (Util.mod(ax, N) === 0) continue; // seam lines drawn thicker below
+    const p1 = Util.absToScreen(ax, y0);
+    const p2 = Util.absToScreen(ax, y1);
     if (p1.x < -margin || p1.x > viewW + margin) continue;
     ctx.moveTo(p1.x, p1.y);
     ctx.lineTo(p2.x, p2.y);
   }
   ctx.stroke();
 
-  // Horizontal regular lines
+  // Horizontal regular lines: ay where ay % N != 0
   ctx.beginPath();
-  for (let gy = y0; gy <= y1; gy++) {
-    if (gy % N === 0) continue;
-    const p1 = Util.worldToScreen(x0, gy);
-    const p2 = Util.worldToScreen(x1, gy);
+  for (let ay = y0; ay <= y1; ay++) {
+    if (Util.mod(ay, N) === 0) continue;
+    const p1 = Util.absToScreen(x0, ay);
+    const p2 = Util.absToScreen(x1, ay);
     if (p1.y < -margin || p1.y > viewH + margin) continue;
     ctx.moveTo(p1.x, p1.y);
     ctx.lineTo(p2.x, p2.y);
@@ -76,47 +83,46 @@ Render.drawGrid = function(left, right, top, bottom) {
   ctx.strokeStyle = 'rgba(233,238,245,0.22)';
   ctx.lineWidth = 2;
 
-  // Vertical seams at gx ≡ 0 (mod N)
+  // Vertical seams at ax ≡ 0 (mod N)
   ctx.beginPath();
-  // find first multiple of N >= x0
-  let gx0 = x0 - ((x0 % N) + N) % N;
-  for (let gx = gx0; gx <= x1; gx += N) {
-    const p1 = Util.worldToScreen(gx, y0);
-    const p2 = Util.worldToScreen(gx, y1);
+  let ax0 = x0 - Util.mod(x0, N);
+  for (let ax = ax0; ax <= x1; ax += N) {
+    const p1 = Util.absToScreen(ax, y0);
+    const p2 = Util.absToScreen(ax, y1);
     if (p1.x < -margin || p1.x > viewW + margin) continue;
     ctx.moveTo(p1.x, p1.y);
     ctx.lineTo(p2.x, p2.y);
   }
   ctx.stroke();
 
-  // Horizontal seams at gy ≡ 0 (mod N)
+  // Horizontal seams at ay ≡ 0 (mod N)
   ctx.beginPath();
-  let gy0 = y0 - ((y0 % N) + N) % N;
-  for (let gy = gy0; gy <= y1; gy += N) {
-    const p1 = Util.worldToScreen(x0, gy);
-    const p2 = Util.worldToScreen(x1, gy);
+  let ay0 = y0 - Util.mod(y0, N);
+  for (let ay = ay0; ay <= y1; ay += N) {
+    const p1 = Util.absToScreen(x0, ay);
+    const p2 = Util.absToScreen(x1, ay);
     if (p1.y < -margin || p1.y > viewH + margin) continue;
     ctx.moveTo(p1.x, p1.y);
     ctx.lineTo(p2.x, p2.y);
   }
   ctx.stroke();
-}
+};
 
-Render.drawStones = function(left, right, top, bottom) {
-  const x0 = Math.floor(left);
-  const x1 = Math.ceil(right);
-  const y0 = Math.floor(top);
-  const y1 = Math.ceil(bottom);
+Render.drawStonesAbs = function (leftA, rightA, topA, bottomA) {
+  const x0 = Math.floor(leftA);
+  const x1 = Math.ceil(rightA);
+  const y0 = Math.floor(topA);
+  const y1 = Math.ceil(bottomA);
 
   const r = cell * 0.43;
-  for (let gx = x0; gx <= x1; gx++) {
-    const bx = Util.wrap(gx);
-    for (let gy = y0; gy <= y1; gy++) {
-      const by = Util.wrap(gy);
-      const v = board[by][bx];
+
+  for (let ax = x0; ax <= x1; ax++) {
+    for (let ay = y0; ay <= y1; ay++) {
+      const c = Util.absToBase(ax, ay);
+      const v = board[c.by][c.bx];
       if (v === 0) continue;
 
-      const p = Util.worldToScreen(gx, gy);
+      const p = Util.absToScreen(ax, ay);
       if (p.x < -r || p.x > viewW + r || p.y < -r || p.y > viewH + r) continue;
 
       ctx.beginPath();
@@ -124,7 +130,15 @@ Render.drawStones = function(left, right, top, bottom) {
       ctx.fillStyle = v === 1 ? '#0a0b0d' : '#f2f5f9';
       ctx.fill();
 
-      const hl = ctx.createRadialGradient(p.x - r * 0.35, p.y - r * 0.35, r * 0.1, p.x, p.y, r);
+      const hl = ctx.createRadialGradient(
+        p.x - r * 0.35,
+        p.y - r * 0.35,
+        r * 0.1,
+        p.x,
+        p.y,
+        r
+      );
+
       if (v === 1) {
         hl.addColorStop(0, 'rgba(255,255,255,0.10)');
         hl.addColorStop(1, 'rgba(255,255,255,0.00)');
@@ -132,6 +146,7 @@ Render.drawStones = function(left, right, top, bottom) {
         hl.addColorStop(0, 'rgba(0,0,0,0.10)');
         hl.addColorStop(1, 'rgba(0,0,0,0.00)');
       }
+
       ctx.fillStyle = hl;
       ctx.beginPath();
       ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
@@ -142,21 +157,21 @@ Render.drawStones = function(left, right, top, bottom) {
       ctx.stroke();
     }
   }
-}
+};
 
-Render.drawHover = function(gx, gy) {
+Render.drawHoverAbs = function (ax, ay) {
   const r = cell * 0.42;
-
   const stroke = toMove === 1 ? 'rgba(40, 40, 40, 0.6)' : 'rgba(220, 220, 220, 0.7)';
   const fill = toMove === 1 ? 'rgba(40, 40, 40, 0.5)' : 'rgba(220, 220, 220, 0.4)';
 
   ctx.lineWidth = 2;
 
+  // Draw hover at equivalent repeated intersections in a 3x3 tile neighborhood.
   for (let ty = -1; ty <= 1; ty++) {
     for (let tx = -1; tx <= 1; tx++) {
-      const px = gx + tx * N;
-      const py = gy + ty * N;
-      const p = Util.worldToScreen(px, py);
+      const px = ax + tx * N;
+      const py = ay + ty * N;
+      const p = Util.absToScreen(px, py);
 
       if (p.x < -r || p.x > viewW + r || p.y < -r || p.y > viewH + r) continue;
 
@@ -168,4 +183,38 @@ Render.drawHover = function(gx, gy) {
       ctx.stroke();
     }
   }
-}
+};
+
+Render.drawTerritoryAbs = function(leftA, rightA, topA, bottomA) {
+  const score = Engine.getScoreResult();
+  if (!score || !score.ownership) return;
+
+  const x0 = Math.floor(leftA);
+  const x1 = Math.ceil(rightA);
+  const y0 = Math.floor(topA);
+  const y1 = Math.ceil(bottomA);
+
+  const r = cell * 0.45;
+
+  for (let ax = x0; ax <= x1; ax++) {
+    for (let ay = y0; ay <= y1; ay++) {
+      const { bx, by } = Util.absToBase(ax, ay);
+      const owner = score.ownership[by][bx];
+      if (owner === 0) continue;
+
+      const p = Util.absToScreen(ax, ay);
+      if (p.x < -r || p.x > viewW + r || p.y < -r || p.y > viewH + r) continue;
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+
+      // subtle, soft fill
+      ctx.fillStyle =
+        owner === 1
+          ? 'rgba(30,30,30,0.18)'   // black territory
+          : 'rgba(235,235,235,0.22)'; // white territory
+
+      ctx.fill();
+    }
+  }
+};
