@@ -1,0 +1,29 @@
+ <!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Toroidal Go (Drag-to-Pan, Wraparound)</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="wrap">
+  <div id="topbar">
+    <div class="pill" id="turnPill">Turn: Black</div>
+    <div class="pill" id="statusPill">Ready</div>
+    <button id="passBtn">Pass</button>
+    <button id="resetBtn">Reset</button>
+    <label class="pill" style="display:flex; align-items:center; gap:8px;">
+      N
+      <input id="sizeInput" type="number" min="5" max="49" step="1" value="19" />
+    </label>
+    <button id="applySizeBtn">Apply</button>
+    <div id="hint">Drag to pan • Click to place • Wraps like Asteroids</div>
+  </div>
+  <div id="game-shell">
+    <canvas id="canvas"></canvas>
+  </div>
+</div>
+</body>
+<script src="game.js"></script>
+</html>
