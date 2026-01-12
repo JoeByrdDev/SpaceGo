@@ -121,7 +121,7 @@ Engine.tryPlayBase = function (x, y) {
   return { ok: true, captured };
 };
 
-Engine.pass = function () {
+Engine.pass = function() {
   if (phase !== 'play') return;
 
   toMove = Util.other(toMove);
@@ -138,7 +138,7 @@ Engine.pass = function () {
   Render.requestRender();
 };
 
-Engine.reset = function (n = N) {
+Engine.reset = function(n = N) {
   Util.setBoardSize(n);
   board = Util.makeBoard(N);
   Util.setToMove(1);
@@ -147,9 +147,12 @@ Engine.reset = function (n = N) {
   Util.seen = new Set();
   Util.rememberPosition();
 
-  Util.setTurnUI();
   phase = 'play';
   passStreak = 0;
+  deadSet.clear();
+  scoreResult = null;
+
+  Util.setTurnUI();
   Util.setStatus('Ready');
   Render.requestRender();
 };
@@ -158,60 +161,142 @@ Engine.reset = function (n = N) {
 let phase = 'play';     // 'play' | 'scoring'
 let passStreak = 0;
 
+// dead stones are tracked in BASE coords (x,y in 0..N-1)
+let deadSet = new Set();
+const dkey = (x, y) => x + ',' + y;
+
 Engine.getPhase = () => phase;
+Engine.getScoreResult = () => scoreResult;
+Engine.isDeadBase = (x, y) => deadSet.has(dkey(x, y));
+Engine.clearDead = () => { deadSet.clear(); };
+
+// helper: board value with dead stones treated as empty (for scoring)
+Engine.valueForScoring = function(x, y) {
+  return deadSet.has(dkey(x, y)) ? 0 : board[y][x];
+};
 
 Engine.enterScoring = function() {
   phase = 'scoring';
-  scoreResult = Engine.computeScore();
+  scoreResult = Engine.computeScore(); // uses valueForScoring
+  const s = scoreResult;
+  Util.setStatus(
+    `Scoring — B:${s.blackTotal} (S${s.blackStones}+T${s.blackTerritory}) ` +
+    `W:${s.whiteTotal} (S${s.whiteStones}+T${s.whiteTerritory})`
+  );
+  Render.requestRender();
+};
 
+Engine.exitScoring = function() {
+  phase = 'play';
+  passStreak = 0;
+  deadSet.clear();
+  scoreResult = null;
+  Util.setStatus('Ready');
+  Render.requestRender();
+};
+
+// Toggle dead for the entire connected group at base (x,y)
+Engine.toggleDeadGroupBase = function(x, y) {
+  x = Util.wrap(x); y = Util.wrap(y);
+  const v = board[y][x];
+  if (v === 0) return { ok: false, reason: 'Empty' };
+  if (phase !== 'scoring') return { ok: false, reason: 'Not scoring' };
+
+  const g = Engine.collectGroupStonesOnly(x, y); // new helper below
+
+  // if ANY stone is dead => revive whole group; else kill whole group
+  let anyDead = false;
+  for (const [sx, sy] of g.stones) {
+    if (deadSet.has(dkey(sx, sy))) { anyDead = true; break; }
+  }
+
+  if (anyDead) {
+    for (const [sx, sy] of g.stones) deadSet.delete(dkey(sx, sy));
+  } else {
+    for (const [sx, sy] of g.stones) deadSet.add(dkey(sx, sy));
+  }
+
+  // recompute score + territory shading immediately
+  scoreResult = Engine.computeScore();
   const s = scoreResult;
   Util.setStatus(
     `Scoring — B:${s.blackTotal} (S${s.blackStones}+T${s.blackTerritory}) ` +
     `W:${s.whiteTotal} (S${s.whiteStones}+T${s.whiteTerritory})`
   );
 
-  Render.requestRender();
+  return { ok: true };
 };
 
+// Absolute wrapper for toggling
+Engine.toggleDeadAtAbs = function(ax, ay) {
+  const { bx, by } = Util.absToBase(ax, ay);
+  return Engine.toggleDeadGroupBase(bx, by);
+};
+
+// Replace your collectGroupAndLiberties with a stones-only helper for dead marking
+Engine.collectGroupStonesOnly = function(x, y) {
+  const color = board[y][x];
+  const stack = [[x, y]];
+  const visited = new Set();
+  const stones = [];
+  const key = (a, b) => a + ',' + b;
+  visited.add(key(x, y));
+
+  while (stack.length) {
+    const [cx, cy] = stack.pop();
+    stones.push([cx, cy]);
+    for (const [nx, ny] of Engine.neighbors(cx, cy)) {
+      if (board[ny][nx] !== color) continue;
+      const k = key(nx, ny);
+      if (visited.has(k)) continue;
+      visited.add(k);
+      stack.push([nx, ny]);
+    }
+  }
+  return { color, stones };
+};
+
+// --- scoring: modify computeScore to use Engine.valueForScoring and to emit ownership ---
 Engine.computeScore = function() {
   let blackStones = 0, whiteStones = 0;
   let blackTerritory = 0, whiteTerritory = 0, neutral = 0;
+
+  // ownership[y][x] = 0 neutral, 1 black terr, 2 white terr
   const ownership = Array.from({ length: N }, () => Array(N).fill(0));
 
-  // count stones
+  // count stones (excluding dead)
   for (let y = 0; y < N; y++) {
     for (let x = 0; x < N; x++) {
-      const v = board[y][x];
+      const v = Engine.valueForScoring(x, y);
       if (v === 1) blackStones++;
       else if (v === 2) whiteStones++;
     }
   }
 
-  // territory via empty-region flood fill
+  // territory via empty-region flood fill (wrapped adjacency)
   const visited = new Set();
   const key = (x, y) => x + ',' + y;
 
   for (let y = 0; y < N; y++) {
     for (let x = 0; x < N; x++) {
-      if (board[y][x] !== 0) continue;
+      if (Engine.valueForScoring(x, y) !== 0) continue;
       const k0 = key(x, y);
       if (visited.has(k0)) continue;
 
-      // BFS region
       const q = [[x, y]];
-const region = [];
-visited.add(k0);
+      const region = [];
+      visited.add(k0);
 
-let regionSize = 0;
-const border = new Set();
+      let regionSize = 0;
+      const border = new Set(); // 1/2
 
       while (q.length) {
         const [cx, cy] = q.pop();
-region.push([cx, cy]);
-regionSize++;
+        region.push([cx, cy]);
+        regionSize++;
 
         for (const [nx, ny] of Engine.neighbors(cx, cy)) {
-          const v = board[ny][nx];
+          const v = Engine.valueForScoring(nx, ny);
           if (v === 0) {
             const k = key(nx, ny);
             if (!visited.has(k)) {
@@ -219,23 +304,20 @@ regionSize++;
               q.push([nx, ny]);
             }
           } else {
-            border.add(v); // 1 or 2
+            border.add(v);
           }
         }
       }
 
       if (border.size === 1) {
-		const only = border.values().next().value;
-		if (only === 1) blackTerritory += regionSize;
-		else whiteTerritory += regionSize;
+        const only = border.values().next().value;
+        if (only === 1) blackTerritory += regionSize;
+        else if (only === 2) whiteTerritory += regionSize;
 
-		// mark ownership
-		for (const [rx, ry] of region) {
-			ownership[ry][rx] = only;
-		}
-	  } else {
-		neutral += regionSize;
-	  }
+        for (const [rx, ry] of region) ownership[ry][rx] = only;
+      } else {
+        neutral += regionSize;
+      }
     }
   }
 
@@ -243,7 +325,7 @@ regionSize++;
     blackStones, whiteStones,
     blackTerritory, whiteTerritory,
     neutral,
-	ownership,
+    ownership,
     blackTotal: blackStones + blackTerritory,
     whiteTotal: whiteStones + whiteTerritory,
   };

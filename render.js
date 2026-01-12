@@ -29,6 +29,9 @@ Render.drawOnce = function () {
   if (Engine.getPhase && Engine.getPhase() === 'scoring') {
   Render.drawTerritoryAbs(leftA, rightA, topA, bottomA);
 }
+  if (Engine.getPhase && Engine.getPhase() === 'scoring') {
+  Render.drawTerritoryAbs(leftA, rightA, topA, bottomA);
+}
   Render.drawStonesAbs(leftA, rightA, topA, bottomA);
 
   // Hover indicator (absolute), repeated by +/-N
@@ -108,13 +111,15 @@ Render.drawGridAbs = function (leftA, rightA, topA, bottomA) {
   ctx.stroke();
 };
 
-Render.drawStonesAbs = function (leftA, rightA, topA, bottomA) {
+Render.drawStonesAbs = function(leftA, rightA, topA, bottomA) {
   const x0 = Math.floor(leftA);
   const x1 = Math.ceil(rightA);
   const y0 = Math.floor(topA);
   const y1 = Math.ceil(bottomA);
 
   const r = cell * 0.43;
+
+  const isScoring = Engine.getPhase && Engine.getPhase() === 'scoring';
 
   for (let ax = x0; ax <= x1; ax++) {
     for (let ay = y0; ay <= y1; ay++) {
@@ -125,18 +130,21 @@ Render.drawStonesAbs = function (leftA, rightA, topA, bottomA) {
       const p = Util.absToScreen(ax, ay);
       if (p.x < -r || p.x > viewW + r || p.y < -r || p.y > viewH + r) continue;
 
+      const isDead = isScoring && Engine.isDeadBase && Engine.isDeadBase(c.bx, c.by);
+
+      ctx.save();
+      if (isDead) ctx.globalAlpha = 0.35;
+
+      // Stone fill
       ctx.beginPath();
       ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
       ctx.fillStyle = v === 1 ? '#0a0b0d' : '#f2f5f9';
       ctx.fill();
 
+      // Highlight
       const hl = ctx.createRadialGradient(
-        p.x - r * 0.35,
-        p.y - r * 0.35,
-        r * 0.1,
-        p.x,
-        p.y,
-        r
+        p.x - r * 0.35, p.y - r * 0.35, r * 0.1,
+        p.x, p.y, r
       );
 
       if (v === 1) {
@@ -152,9 +160,25 @@ Render.drawStonesAbs = function (leftA, rightA, topA, bottomA) {
       ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
       ctx.fill();
 
+      // Outline
       ctx.strokeStyle = v === 1 ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.12)';
       ctx.lineWidth = 1;
       ctx.stroke();
+
+      ctx.restore();
+
+      // Dead marker cross (after restore so it stays visible)
+      if (isDead) {
+        const rr = r * 0.65;
+        ctx.strokeStyle = v === 1 ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.35)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(p.x - rr, p.y - rr);
+        ctx.lineTo(p.x + rr, p.y + rr);
+        ctx.moveTo(p.x - rr, p.y + rr);
+        ctx.lineTo(p.x + rr, p.y - rr);
+        ctx.stroke();
+      }
     }
   }
 };
@@ -186,7 +210,7 @@ Render.drawHoverAbs = function (ax, ay) {
 };
 
 Render.drawTerritoryAbs = function(leftA, rightA, topA, bottomA) {
-  const score = Engine.getScoreResult();
+  const score = Engine.getScoreResult && Engine.getScoreResult();
   if (!score || !score.ownership) return;
 
   const x0 = Math.floor(leftA);
@@ -207,14 +231,10 @@ Render.drawTerritoryAbs = function(leftA, rightA, topA, bottomA) {
 
       ctx.beginPath();
       ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-
-      // subtle, soft fill
       ctx.fillStyle =
-        owner === 1
-          ? 'rgba(30,30,30,0.18)'   // black territory
-          : 'rgba(235,235,235,0.22)'; // white territory
-
+        owner === 1 ? 'rgba(30,30,30,0.18)' : 'rgba(235,235,235,0.22)';
       ctx.fill();
     }
   }
 };
+

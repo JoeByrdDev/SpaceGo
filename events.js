@@ -75,16 +75,30 @@ Events.onPointerUp = function (e) {
 
   if (!wasDrag) {
     const absf = Util.screenToAbs(sx, sy);
-    const near = Util.absFloatToNearest(absf.ax, absf.ay);
+const near = Util.absFloatToNearest(absf.ax, absf.ay);
 
-    const r = Engine.tryPlayAbs(near.ax, near.ay);
-    if (!r.ok) {
-      Util.setStatus(r.reason);
-    } else {
-      Util.setTurnUI();
-      Util.setStatus(r.captured ? `Captured ${r.captured}` : 'Placed');
-    }
-    Render.requestRender();
+if (Engine.getPhase && Engine.getPhase() === 'scoring') {
+  const r = Engine.toggleDeadAtAbs(near.ax, near.ay);
+
+  // Clicking empty space during scoring is a no-op; keep the scoring status text.
+  if (!r.ok) {
+    if (r.reason !== 'Empty') Util.setStatus(r.reason);
+    // else do nothing
+  }
+
+  Render.requestRender();
+  return;
+}
+
+// normal play path (unchanged)
+const r = Engine.tryPlayAbs(near.ax, near.ay);
+if (!r.ok) {
+  Util.setStatus(r.reason);
+} else {
+  Util.setTurnUI();
+  Util.setStatus(r.captured ? `Captured ${r.captured}` : 'Placed');
+}
+Render.requestRender();
   } else {
     Util._syncGlobals();
   }
