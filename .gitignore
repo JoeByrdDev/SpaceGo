@@ -54,6 +54,6 @@ coverage/
 # Optional: lockfiles you don’t want tracked
 # (remove these lines if you DO want them committed)
 # --------------------
- package-lock.json
+package-lock.json
 # yarn.lock
 # pnpm-lock.yaml

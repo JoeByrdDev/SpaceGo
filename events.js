@@ -91,22 +91,53 @@ if (Engine.getPhase && Engine.getPhase() === 'scoring') {
 }
 
 // normal play path (unchanged)
-const r = Engine.tryPlayAbs(near.ax, near.ay);
-if (!r.ok) {
-  Util.setStatus(r.reason);
-} else {
-  Util.setTurnUI();
-  Util.setStatus(r.captured ? `Captured ${r.captured}` : 'Placed');
-}
-Render.requestRender();
-  } else {
-    Util._syncGlobals();
-  }
+const r0 = (() => {
+  // local pre-validate using simulate, no mutation
+  const s0 = { N, board, toMove, seen: Util.seen, phase: Engine.getPhase(), passStreak: 0 };
+  const { bx, by } = near;
+  return Engine.simulatePlayBase(bx, by, s0);
+})();
 
-  try {
-    canvas.releasePointerCapture(e.pointerId);
-  } catch (_) {}
+if (!r0.ok) {
+  Util.setStatus(r0.reason);
+  Render.requestRender();
+  return;
+}
+
+// If net mode is OFF: commit locally (old behavior, but via applyStateLocal)
+if (!Engine.isNetMode || !Engine.isNetMode()) {
+  Engine.applyStateLocal(r0.next);
+  Util.setTurnUI();
+  Util.setStatus(r0.captured ? `Captured ${r0.captured}` : 'Placed');
+  Render.requestRender();
+  return;
+}
+
+// Net mode ON: ask server, apply authoritative state
+if (Engine.isNetBusy && Engine.isNetBusy()) return;
+
+Engine._setNetBusy(true);
+Util.setStatus('Sending…');
+Render.requestRender();
+
+Net.requestAction({
+  type: 'play',
+  ax: near.ax,
+  ay: near.ay,
+  // optional: include base coords too
+  bx: near.bx,
+  by: near.by,
+}).then((rr) => {
+  if (!rr.ok) Util.setStatus(rr.reason);
+  else Util.setStatus('Placed');
+  Util.setTurnUI();
+  Render.requestRender();
+}).finally(() => {
+  Engine._setNetBusy(false);
+});
+  }
 };
+
 
 Events.onPointerLeave = function () {
   if (mouse.over) {
@@ -136,8 +167,41 @@ Events.onPointerCancel = function () {
 };
 
 // Bindings
-passBtn.addEventListener('click', () => Engine.pass());
-resetBtn.addEventListener('click', () => Engine.reset(N));
+passBtn.addEventListener('click', async () => {
+  if (Engine.isNetMode && Engine.isNetMode()) {
+    if (Engine.isNetBusy && Engine.isNetBusy()) return;
+    Engine._setNetBusy(true);
+    Util.setStatus('Sending…');
+    Render.requestRender();
+    try {
+      const r = await Net.requestAction({ type: 'pass' });
+      if (!r.ok) Util.setStatus(r.reason);
+    } finally {
+      Engine._setNetBusy(false);
+      Render.requestRender();
+    }
+  } else {
+    Engine.pass();
+  }
+});
+
+resetBtn.addEventListener('click', async () => {
+  if (Engine.isNetMode && Engine.isNetMode()) {
+    if (Engine.isNetBusy && Engine.isNetBusy()) return;
+    Engine._setNetBusy(true);
+    Util.setStatus('Resetting…');
+    Render.requestRender();
+    try {
+      const r = await Net.requestAction({ type: 'reset', N });
+      if (!r.ok) Util.setStatus(r.reason);
+    } finally {
+      Engine._setNetBusy(false);
+      Render.requestRender();
+    }
+  } else {
+    Engine.reset(N);
+  }
+});
 applySizeBtn.addEventListener('click', () => {
   const n = Util.clampInt(parseInt(sizeInput.value || '19', 10), 5, 49);
   Engine.reset(n);
