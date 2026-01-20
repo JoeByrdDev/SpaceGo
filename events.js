@@ -213,6 +213,50 @@ applySizeBtn.addEventListener('click', () => {
   Engine.reset(n);
 });
 
+Util.initGamePicker();
+
+async function refreshGameListAndSelectCurrent() {
+  if (!Engine.isNetMode || !Engine.isNetMode()) return;
+
+  const r = await Net.listGames();
+  if (!r.ok) {
+    Util.setStatus(r.reason);
+    return;
+  }
+
+  Util.setGameList(r.games, Net.gameId);
+}
+
+if (window.refreshGamesBtn) {
+  refreshGamesBtn.addEventListener('click', async () => {
+    await refreshGameListAndSelectCurrent();
+    Render.requestRender();
+  });
+}
+
+if (window.gameSelect) {
+  gameSelect.addEventListener('change', async () => {
+    if (!Engine.isNetMode || !Engine.isNetMode()) return;
+    if (Engine.isNetBusy && Engine.isNetBusy()) return;
+
+    const id = gameSelect.value;
+    if (!id) return;
+
+    Engine._setNetBusy(true);
+    Util.setStatus('Loading…');
+    Render.requestRender();
+
+    try {
+      const r = await Net.loadGame(id);
+      if (!r.ok) Util.setStatus(r.reason);
+      else Util.setStatus('Ready');
+    } finally {
+      Engine._setNetBusy(false);
+      Render.requestRender();
+    }
+  });
+}
+
 canvas.addEventListener('pointerdown', Events.onPointerDown);
 canvas.addEventListener('pointermove', Events.onPointerMove);
 canvas.addEventListener('pointerup', Events.onPointerUp);

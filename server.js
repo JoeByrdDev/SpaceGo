@@ -303,6 +303,29 @@ app.get("/api/health", (req, res) => {
   res.json({ ok: true, games: games.size });
 });
 
+app.get("/api/games", (req, res) => {
+  const out = [];
+  for (const g of games.values()) {
+    out.push({
+      gameId: g.id,
+      N: g.N,
+      rev: g.rev,
+      phase: g.phase,
+      createdAt: g.createdAt,
+      updatedAt: g.updatedAt,
+    });
+  }
+  out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  res.json({ ok: true, games: out });
+});
+
+// optional: delete a game (dev convenience)
+app.delete("/api/game/:gameId", (req, res) => {
+  const id = req.params.gameId;
+  const existed = games.delete(id);
+  res.json({ ok: true, deleted: existed });
+});
+
 // create new game
 app.post("/api/game/new", (req, res) => {
   const Nraw = req.body?.N ?? 19;

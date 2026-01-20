@@ -23,6 +23,34 @@ Net._post = async function (path, body, { signal } = {}) {
   return { ok: true, data };
 };
 
+Net._get = async function (path, { signal } = {}) {
+  const res = await fetch(Net.baseUrl + path, { method: 'GET', signal });
+  let data = null;
+  try { data = await res.json(); } catch (_) {}
+  if (!res.ok) {
+    const msg = (data && data.error) || `HTTP ${res.status}`;
+    return { ok: false, reason: msg, status: res.status, data };
+  }
+  return { ok: true, data };
+};
+
+Net.listGames = async function () {
+  const r = await Net._get('/api/games');
+  if (!r.ok) return r;
+  return { ok: true, games: r.data.games || [] };
+};
+
+Net.loadGame = async function (gameId) {
+  const r = await Net._get(`/api/game/${encodeURIComponent(gameId)}`);
+  if (!r.ok) return { ok: false, reason: r.reason };
+  const out = r.data;
+  if (!out.ok || !out.state) return { ok: false, reason: out.error || 'Bad response' };
+
+  Net.gameId = gameId;
+  Net.applyState(out.state);
+  return { ok: true };
+};
+
 // Apply server-authoritative state into globals
 Net.applyState = function (state) {
   // expected: { N, board, toMove, seen, phase, passStreak, deadSet, scoreResult }
@@ -95,7 +123,6 @@ Net.requestAction = async function (action) {
     inFlight = null;
   }
 };
-
 
 Net.cancel = function () {
   if (inFlight) inFlight.abort();

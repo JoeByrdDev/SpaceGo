@@ -44,6 +44,60 @@ Util.other = function (p) {
   return p === 1 ? 2 : 1;
 };
 
+
+const controlsBar = resetBtn?.parentElement || document.body;
+
+let gameSelect = null;
+let refreshGamesBtn = null;
+
+Util.initGamePicker = function () {
+  if (gameSelect) return;
+
+  gameSelect = document.createElement('select');
+  gameSelect.id = 'gameSelect';
+  gameSelect.title = 'Active game';
+
+  refreshGamesBtn = document.createElement('button');
+  refreshGamesBtn.id = 'refreshGamesBtn';
+  refreshGamesBtn.textContent = 'Games';
+
+  // Insert before Reset so it’s in the same control row
+  controlsBar.insertBefore(refreshGamesBtn, resetBtn);
+  controlsBar.insertBefore(gameSelect, resetBtn);
+
+  // expose for events.js
+  window.gameSelect = gameSelect;
+  window.refreshGamesBtn = refreshGamesBtn;
+};
+
+Util.setGameList = function (games, currentId) {
+  if (!gameSelect) return;
+
+  const prev = gameSelect.value;
+
+  // clear
+  while (gameSelect.firstChild) gameSelect.removeChild(gameSelect.firstChild);
+
+  for (const g of games) {
+    const opt = document.createElement('option');
+    opt.value = g.gameId;
+
+    const shortId = g.gameId.slice(0, 6);
+    const phase = g.phase || 'play';
+    opt.textContent = `${shortId}  N${g.N}  r${g.rev}  ${phase}`;
+
+    gameSelect.appendChild(opt);
+  }
+
+  // select current if available, else keep previous if still present, else first.
+  const want = currentId || prev;
+  if (want && [...gameSelect.options].some(o => o.value === want)) {
+    gameSelect.value = want;
+  } else if (gameSelect.options.length) {
+    gameSelect.selectedIndex = 0;
+  }
+};
+
 // --- Absolute grid coordinate API ---
 // Absolute integer intersection: (ax, ay) on infinite plane.
 // Base board lookup: (bx, by) = wrap(ax), wrap(ay) in [0..N-1].
