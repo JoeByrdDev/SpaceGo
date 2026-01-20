@@ -3,7 +3,6 @@ window.Events = window.Events || {};
 
 Events.onPointerDown = function (e) {
   if (e.button !== 0) return; // left only
-
   const rect = canvas.getBoundingClientRect();
   const sx = e.clientX - rect.left;
   const sy = e.clientY - rect.top;
@@ -84,6 +83,13 @@ Events.onPointerUp = function (e) {
       return;
     }
 
+    // Turn gate (insecure on purpose for now): only the selected side can move on its turn.
+    if (!Util.canActNow()) {
+      Util.setStatus(Util.getPlayer() === 0 ? 'Select Black or White' : 'Not your turn');
+      Render.requestRender();
+      return;
+    }
+
     const r0 = (() => {
       const s0 = { N, board, toMove, seen: Util.seen, phase: Engine.getPhase(), passStreak: 0 };
       const { bx, by } = near;
@@ -155,6 +161,11 @@ Events.onPointerCancel = function () {
 
 // Bindings
 passBtn.addEventListener('click', async () => {
+  if (!Util.canActNow()) {
+    Util.setStatus(Util.getPlayer() === 0 ? 'Select Black or White' : 'Not your turn');
+    Render.requestRender();
+    return;
+  }
   if (Engine.isNetMode && Engine.isNetMode()) {
     if (Engine.isNetBusy && Engine.isNetBusy()) return;
     Engine._setNetBusy(true);

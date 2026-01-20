@@ -98,7 +98,7 @@ Net.requestAction = async function (action) {
       rev: Net.rev,
       clientActionId,
       action,
-      client: { posHash: Util.hashPosition(toMove) },
+      client: { posHash: Util.hashPosition(toMove), player: Util.getPlayer ? Util.getPlayer() : 0 },
     };
 
     const r = await Net._post('/api/move', payload, { signal: ac.signal });
@@ -127,3 +127,4 @@ Net.requestAction = async function (action) {
 Net.cancel = function () {
   if (inFlight) inFlight.abort();
 };
+

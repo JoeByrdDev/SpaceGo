@@ -5,9 +5,12 @@ const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 
 const turnPill = document.getElementById('turnPill');
+const youPill = document.getElementById('youPill');
 const statusPill = document.getElementById('statusPill');
 const passBtn = document.getElementById('passBtn');
 const gamesBtn = document.getElementById('gamesBtn');
+const p1Btn = document.getElementById('p1Btn');
+const p2Btn = document.getElementById('p2Btn');
 
 const margin = 10; // extra grid drawn around viewport
 
@@ -48,6 +51,64 @@ if (gamesBtn) {
     window.location.href = '/';
   });
 }
+
+// --- Player selection (cookie) ---
+// player: 0 = observer, 1 = black, 2 = white
+let player = 0;
+let playerCookieKey = 'sg_player';
+
+Util._cookieGet = function (name) {
+  const needle = name + '=';
+  const parts = (document.cookie || '').split(';');
+  for (let p of parts) {
+    p = p.trim();
+    if (p.startsWith(needle)) return decodeURIComponent(p.slice(needle.length));
+  }
+  return null;
+};
+
+Util._cookieSet = function (name, value, days = 3650) {
+  const maxAge = Math.max(0, Math.trunc(days * 86400));
+  document.cookie = `${name}=${encodeURIComponent(String(value))}; Path=/; Max-Age=${maxAge}; SameSite=Lax`;
+};
+
+Util._cookieDel = function (name) {
+  document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=Lax`;
+};
+
+Util._playerLabel = function (p) {
+  if (p === 1) return 'Black';
+  if (p === 2) return 'White';
+  return 'Observer';
+};
+
+Util.setPlayerCookieKey = function (key) {
+  playerCookieKey = key || 'sg_player';
+  const raw = Util._cookieGet(playerCookieKey);
+  const n = raw == null ? 0 : Number(raw);
+  player = (n === 1 || n === 2) ? n : 0;
+  Util._syncGlobals();
+  Util.setPlayerUI();
+};
+
+Util.getPlayer = function () {
+  return player;
+};
+
+Util.setPlayer = function (p) {
+  const v = (p === 1 || p === 2) ? p : 0;
+  player = v;
+  if (v === 0) Util._cookieDel(playerCookieKey);
+  else Util._cookieSet(playerCookieKey, v);
+  Util._syncGlobals();
+  Util.setPlayerUI();
+  if (window.Render && Render.requestRender) Render.requestRender();
+};
+
+Util.canActNow = function () {
+  // Observer can never place/pass.
+  return player !== 0 && player === toMove;
+};
 
 // --- Absolute grid coordinate API ---
 Util.absToBase = function (ax, ay) {
@@ -106,6 +167,7 @@ window.camAX = camAX;
 window.camAY = camAY;
 
 window.toMove = toMove;
+window.player = player;
 
 window.dragging = dragging;
 window.dragStart = dragStart;
@@ -125,6 +187,7 @@ Util._syncGlobals = function () {
   window.camAY = camAY;
 
   window.toMove = toMove;
+  window.player = player;
 
   window.dragging = dragging;
   window.dragStart = dragStart;
@@ -154,7 +217,22 @@ Util.setStatus = function (text) {
 
 Util.setTurnUI = function () {
   turnPill.textContent = `Turn: ${toMove === 1 ? 'Black' : 'White'}`;
+  Util.setPlayerUI();
 };
+
+Util.setPlayerUI = function () {
+  if (!youPill) return;
+  const label = Util._playerLabel(player);
+  const suffix = (player !== 0 && player === toMove) ? ' (your turn)' : '';
+  youPill.textContent = `You: ${label}${suffix}`;
+
+  if (p1Btn) p1Btn.disabled = player === 1;
+  if (p2Btn) p2Btn.disabled = player === 2;
+};
+
+// Player picker bindings
+if (p1Btn) p1Btn.addEventListener('click', () => Util.setPlayer(1));
+if (p2Btn) p2Btn.addEventListener('click', () => Util.setPlayer(2));
 
 Util.hashPosition = function (nextPlayer = toMove) {
   let s = '' + nextPlayer + '|';
@@ -223,9 +301,13 @@ Util.newActionId = function () {
 
 // Export UI elements for Events.js
 window.turnPill = turnPill;
+window.youPill = youPill;
 window.statusPill = statusPill;
 window.passBtn = passBtn;
 window.gamesBtn = gamesBtn;
+window.p1Btn = p1Btn;
+window.p2Btn = p2Btn;
 
 // Initial sync
 Util._syncGlobals();
+Util.setPlayerUI();
