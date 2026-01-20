@@ -85,10 +85,11 @@ function gamePublicState(g) {
     N: g.N,
     board: g.board,
     toMove: g.toMove,
-    phase: g.phase, // "play" | "scoring" (scoring stubbed)
+    phase: g.phase,
     passStreak: g.passStreak,
     deadSet: Array.from(g.deadSet),
     scoreResult: g.scoreResult,
+    rev: g.rev,
     posHash: hashPosition(g),
   };
 }
@@ -103,13 +104,13 @@ function createGame(N = 19) {
     passStreak: 0,
     deadSet: new Set(),
     scoreResult: null,
-    // Server-only superko memory (do NOT send to client)
+    rev: 0,
+    clientActions: new Map(), // clientActionId -> response payload
     seen: new Set(),
     createdAt: nowMs(),
     updatedAt: nowMs(),
   };
 
-  // mark initial position as seen for superko with next-to-move already included in hashPosition
   g.seen.add(hashPosition(g));
   return g;
 }
@@ -323,13 +324,27 @@ app.get("/api/game/:gameId", (req, res) => {
 
 // single action endpoint (what your Net.requestAction should call)
 app.post("/api/move", (req, res) => {
-  const { gameId, action } = req.body || {};
+  const { gameId, action, rev, clientActionId } = req.body || {};
   if (!gameId || !action || !action.type) {
     return res.status(400).json({ ok: false, error: "Missing gameId/action" });
   }
 
   const g = games.get(gameId);
   if (!g) return res.status(404).json({ ok: false, error: "Game not found" });
+
+  // Idempotency: return cached payload for duplicates.
+  if (clientActionId && g.clientActions.has(clientActionId)) {
+    return res.json(g.clientActions.get(clientActionId));
+  }
+
+  // Revision gate.
+  if (!Number.isInteger(rev) || rev !== g.rev) {
+    return res.status(409).json({
+      ok: false,
+      error: "Out of date",
+      state: gamePublicState(g),
+    });
+  }
 
   let r;
   const t = action.type;
@@ -368,21 +383,34 @@ app.post("/api/move", (req, res) => {
     return res.status(400).json({ ok: false, error: "Unknown action type" });
   }
 
+ let payload;
   if (!r.ok) {
-    return res.json({
+    payload = {
       ok: true,
       accepted: false,
       reason: r.reason || "Rejected",
-      state: gamePublicState(g), // optional: still return current authoritative state
-    });
+      state: gamePublicState(g),
+    };
+  } else {
+    g.rev += 1;
+    g.updatedAt = nowMs();
+    payload = {
+      ok: true,
+      accepted: true,
+      meta: { captured: r.captured || 0 },
+      state: gamePublicState(g),
+    };
   }
 
-  return res.json({
-    ok: true,
-    accepted: true,
-    meta: { captured: r.captured || 0 },
-    state: gamePublicState(g),
-  });
+  if (clientActionId) {
+    g.clientActions.set(clientActionId, payload);
+    while (g.clientActions.size > 300) {
+      const oldestKey = g.clientActions.keys().next().value;
+      g.clientActions.delete(oldestKey);
+    }
+  }
+
+  return res.json(payload);
 });
 
 /* -----------------------------

@@ -208,6 +208,23 @@ Util.setToMove = function (p) {
   Util._syncGlobals();
 };
 
+// Client action id for idempotent server actions
+Util.newActionId = function () {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    return window.crypto.randomUUID();
+  }
+  // fallback: 16 random bytes -> hex
+  const buf = new Uint8Array(16);
+  if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+    window.crypto.getRandomValues(buf);
+  } else {
+    for (let i = 0; i < buf.length; i++) buf[i] = (Math.random() * 256) | 0;
+  }
+  let hex = '';
+  for (let i = 0; i < buf.length; i++) hex += buf[i].toString(16).padStart(2, '0');
+  return hex;
+};
+
 // Export UI elements for Events.js
 window.turnPill = turnPill;
 window.statusPill = statusPill;

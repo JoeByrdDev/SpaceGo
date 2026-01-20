@@ -186,19 +186,31 @@ passBtn.addEventListener('click', async () => {
 });
 
 resetBtn.addEventListener('click', async () => {
-  // Always create a fresh server game when net mode is on
   if (Engine.isNetMode && Engine.isNetMode()) {
+    Util.setStatus('New game…');
+    Render.requestRender();
     const r = await Engine.newGame(N);
     if (!r.ok) Util.setStatus(r.reason);
+    Render.requestRender();
     return;
   }
   Engine.reset(N);
 });
 
-applySizeBtn.addEventListener('click', async () => {
+applySizeBtn.addEventListener('click', () => {
   const n = Util.clampInt(parseInt(sizeInput.value || '19', 10), 5, 49);
-  const r = await Engine.newGame(n);
-  if (!r.ok) Util.setStatus(r.reason);
+
+  if (Engine.isNetMode && Engine.isNetMode()) {
+    Util.setStatus('New board…');
+    Render.requestRender();
+    Engine.newGame(n).then((r) => {
+      if (!r.ok) Util.setStatus(r.reason);
+      Render.requestRender();
+    });
+    return;
+  }
+
+  Engine.reset(n);
 });
 
 canvas.addEventListener('pointerdown', Events.onPointerDown);

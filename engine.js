@@ -430,9 +430,8 @@ Engine.collectGroupStonesOnly = function(x, y) {
 
 // Create a brand-new server game with board size n, then swap Net.gameId + state
 Engine.newGame = async function (n = N) {
-  const safeN = Util.clampInt(Number.parseInt(n, 10), 5, 49);
+  const safeN = Util.clampInt(parseInt(n, 10), 5, 49);
 
-  // offline/local fallback
   if (!Engine.isNetMode || !Engine.isNetMode()) {
     Engine.reset(safeN);
     return { ok: true };
@@ -442,20 +441,15 @@ Engine.newGame = async function (n = N) {
 
   Engine._setNetBusy(true);
   try {
-    const r = await fetch('/api/game/new', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ N: safeN }),
-    });
+    const r = await Net._post('/api/game/new', { N: safeN });
+    if (!r.ok) return { ok: false, reason: r.reason };
 
-    const data = await r.json();
-    if (!r.ok || !data?.ok) return { ok: false, reason: data?.error || `HTTP ${r.status}` };
+    const out = r.data;
+    if (!out.ok || !out.gameId || !out.state) return { ok: false, reason: out.error || 'Bad response' };
 
-    Net.gameId = data.gameId;
-    if (data.state) Net.applyState(data.state);
-
+    Net.gameId = out.gameId;
+    Net.applyState(out.state);
     Util.setStatus('Ready');
-    Render.requestRender();
     return { ok: true };
   } catch (e) {
     return { ok: false, reason: e?.message || 'Network error' };

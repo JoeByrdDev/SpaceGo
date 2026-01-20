@@ -39,37 +39,52 @@ Net.applyState = function (state) {
   Render.requestRender();
 };
 
-// Main entry: request an action. Ensures single-flight (drops/blocks spam).
+// Server revision (authoritative). Updated on every Net.applyState.
+Net.rev = 0;
+
+Net.applyState = function (state) {
+  if (typeof state.rev === 'number') Net.rev = state.rev;
+  if (state.N && state.N !== N) Util.setBoardSize(state.N);
+
+  if (state.board) board = state.board;
+  if (state.toMove) Util.setToMove(state.toMove);
+  if (state.seen) Util.seen = new Set(state.seen);
+
+  if (Engine && Engine._setServerPhase) Engine._setServerPhase(state);
+
+  Util.setTurnUI();
+  Render.requestRender();
+};
+
 Net.requestAction = async function (action) {
   if (inFlight) return { ok: false, reason: 'Busy' };
-
-	console.log("requesting " + action)
 
   const ac = new AbortController();
   inFlight = ac;
 
   try {
+    const clientActionId = action.clientActionId || Util.newActionId();
+
     const payload = {
-      gameId: Net.gameId || 'local-dev', // swap later
+      gameId: Net.gameId || 'local-dev',
+      rev: Net.rev,
+      clientActionId,
       action,
-      // client-side hinting/debug (optional):
-      client: {
-        posHash: Util.hashPosition(toMove),
-      },
+      client: { posHash: Util.hashPosition(toMove) },
     };
 
     const r = await Net._post('/api/move', payload, { signal: ac.signal });
 
-    if (!r.ok) return { ok: false, reason: r.reason };
-
-    // expected server response:
-    // { ok:true, accepted:true/false, reason?, state? }
-    const out = r.data;
-
-    if (!out.ok || !out.accepted) {
-      return { ok: false, reason: out.reason || 'Rejected' };
+    // Stale/out-of-date: server returns 409 + authoritative state.
+    if (!r.ok && r.status === 409 && r.data && r.data.state) {
+      Net.applyState(r.data.state);
+      return { ok: false, reason: 'Out of date' };
     }
 
+    if (!r.ok) return { ok: false, reason: r.reason };
+
+    const out = r.data;
+    if (!out.ok || !out.accepted) return { ok: false, reason: out.reason || 'Rejected' };
     if (out.state) Net.applyState(out.state);
 
     return { ok: true };
@@ -80,6 +95,7 @@ Net.requestAction = async function (action) {
     inFlight = null;
   }
 };
+
 
 Net.cancel = function () {
   if (inFlight) inFlight.abort();
