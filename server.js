@@ -11,7 +11,22 @@ const app = express();
 const PORT = 5173;
 
 app.use(express.json());
-app.use(express.static(__dirname));
+
+// serve lobby on /
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "lobby.html"));
+});
+
+// serve the actual game page at /game.html (backed by index.html)
+app.get("/game.html", (req, res) => {
+  res.sendFile(path.join(__dirname, "index.html"));
+});
+app.get("/game", (req, res) => {
+  res.sendFile(path.join(__dirname, "index.html"));
+});
+
+// IMPORTANT: disable static index fallback so "/" doesn't auto-serve index.html
+app.use(express.static(__dirname, { index: false }));
 
 /* -----------------------------
    In-memory game store (dev)
@@ -297,6 +312,19 @@ function doFinalizeScoring(g) {
 /* -----------------------------
    API
 ------------------------------ */
+
+// server.js (additions)
+// Keep everything else the same. This just wires lobby + game page routes.
+// Existing server is express.static(__dirname) already. :contentReference[oaicite:0]{index=0}
+
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "lobby.html"));
+});
+
+// Optional: friendly game URL
+app.get("/game", (req, res) => {
+  res.sendFile(path.join(__dirname, "game.html"));
+});
 
 // health
 app.get("/api/health", (req, res) => {

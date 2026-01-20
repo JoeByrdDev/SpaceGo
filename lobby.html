@@ -1,0 +1,163 @@
+<!-- lobby.html -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SpaceGo — Select Game</title>
+  <style>
+    html, body { height:100%; margin:0; background:#0b0d10; color:#e9eef5; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    .wrap { min-height:100%; display:flex; align-items:center; justify-content:center; padding:24px; box-sizing:border-box; }
+    .card { width: min(820px, 100%); border:1px solid #202733; background:#0f1318; border-radius:16px; padding:16px; box-sizing:border-box; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin:10px 0; }
+    h1 { font-size:18px; margin:0 0 8px; font-weight:650; }
+    .muted { opacity:0.8; font-size:12px; }
+    select, input, button {
+      background:#0b0d10; color:#e9eef5;
+      border:1px solid #2a3443; border-radius:10px;
+      padding:10px 12px; font-size:14px;
+    }
+    select { min-width: 320px; flex: 1; }
+    input { width: 120px; }
+    button { background:#1a2230; cursor:pointer; }
+    button:hover { background:#222c3d; }
+    .spacer { flex:1; }
+    .status { font-size:12px; opacity:0.85; }
+    .danger { color:#ffb4b4; }
+    .ok { color:#b9ffcc; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Game selection</h1>
+      <div class="muted">Pick an existing game, or create a new one. (Net mode assumes same-origin APIs.)</div>
+
+      <div class="row" style="margin-top:14px;">
+        <select id="games"></select>
+        <button id="refresh">Refresh</button>
+        <button id="open">Open</button>
+      </div>
+
+      <div class="row">
+        <div class="muted">Create new:</div>
+        <input id="size" type="number" min="5" max="49" value="19" />
+        <button id="create">Create</button>
+        <div class="spacer"></div>
+        <div class="status" id="status"></div>
+      </div>
+
+      <div class="row">
+        <div class="muted">Open by id:</div>
+        <input id="joinId" type="text" placeholder="gameId" style="width:220px" />
+        <button id="join">Open</button>
+      </div>
+
+      <div class="muted">Opens the existing game page at <code>/game.html?gameId=...</code>.</div>
+    </div>
+  </div>
+
+<script>
+  const elGames = document.getElementById('games');
+  const elStatus = document.getElementById('status');
+
+  function setStatus(msg, kind) {
+    elStatus.textContent = msg || '';
+    elStatus.className = 'status ' + (kind || '');
+  }
+
+  function clampInt(v, lo, hi, fallback) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return fallback;
+    const t = Math.trunc(n);
+    return Math.max(lo, Math.min(hi, t));
+  }
+
+  async function apiGet(path) {
+    const r = await fetch(path, { method:'GET' });
+    let data = null;
+    try { data = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error((data && (data.error || data.reason)) || ('HTTP ' + r.status));
+    return data;
+  }
+
+  async function apiPost(path, body) {
+    const r = await fetch(path, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify(body || {})
+    });
+    let data = null;
+    try { data = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error((data && (data.error || data.reason)) || ('HTTP ' + r.status));
+    return data;
+  }
+
+  function fillList(games) {
+    while (elGames.firstChild) elGames.removeChild(elGames.firstChild);
+
+    for (const g of games) {
+      const opt = document.createElement('option');
+      opt.value = g.gameId;
+      const shortId = (g.gameId || '').slice(0, 8);
+      opt.textContent = `${shortId}  N${g.N}  r${g.rev}  ${g.phase || 'play'}`;
+      elGames.appendChild(opt);
+    }
+  }
+
+  async function refresh() {
+    setStatus('Loading…');
+    try {
+      const out = await apiGet('/api/games');
+      const games = (out && out.games) ? out.games : [];
+      fillList(games);
+      setStatus(games.length ? `Loaded ${games.length} games` : 'No games yet', games.length ? 'ok' : '');
+    } catch (e) {
+      setStatus(e.message || 'Failed', 'danger');
+    }
+  }
+
+  function goGame(gameId) {
+    if (!gameId) return;
+    window.location.href = `/game.html?gameId=${encodeURIComponent(gameId)}`;
+  }
+
+  document.getElementById('refresh').addEventListener('click', refresh);
+
+  document.getElementById('open').addEventListener('click', () => {
+    const id = elGames.value;
+    goGame(id);
+  });
+
+  document.getElementById('create').addEventListener('click', async () => {
+    const N = clampInt(document.getElementById('size').value, 5, 49, 19);
+    setStatus('Creating…');
+    try {
+      const out = await apiPost('/api/game/new', { N });
+      if (!out || !out.gameId) throw new Error('Bad response');
+      setStatus('Created', 'ok');
+      goGame(out.gameId);
+    } catch (e) {
+      setStatus(e.message || 'Failed', 'danger');
+    }
+  });
+
+  document.getElementById('join').addEventListener('click', async () => {
+    const id = (document.getElementById('joinId').value || '').trim();
+    if (!id) return;
+
+    setStatus('Checking…');
+    try {
+      // validate it exists (optional, but keeps error on lobby page)
+      await apiGet(`/api/game/${encodeURIComponent(id)}`);
+      setStatus('Opening', 'ok');
+      goGame(id);
+    } catch (e) {
+      setStatus(e.message || 'Not found', 'danger');
+    }
+  });
+
+  refresh();
+</script>
+</body>
+</html>
