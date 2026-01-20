@@ -8,7 +8,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 5173;
+const PORT = 8080;
 
 app.use(express.json());
 
@@ -33,6 +33,28 @@ app.use(express.static(__dirname, { index: false }));
 ------------------------------ */
 
 const games = new Map(); // gameId -> Game
+
+function resolveGame(idOrPrefix) {
+  if (!idOrPrefix) return { g: null, error: "Missing id" };
+
+  // exact match first
+  const exact = games.get(idOrPrefix);
+  if (exact) return { g: exact };
+
+  // allow short prefix (like the 8-char lobby display)
+  const prefix = String(idOrPrefix).trim();
+  if (prefix.length < 4) return { g: null, error: "Id too short" };
+
+  const matches = [];
+  for (const g of games.values()) {
+    if (g.id.startsWith(prefix)) matches.push(g);
+  }
+
+  if (matches.length === 1) return { g: matches[0] };
+  if (matches.length === 0) return { g: null, error: "Game not found" };
+  return { g: null, error: "Ambiguous id (multiple matches)" };
+}
+
 
 function nowMs() {
   return Date.now();
@@ -347,11 +369,12 @@ app.get("/api/games", (req, res) => {
   res.json({ ok: true, games: out });
 });
 
-// optional: delete a game (dev convenience)
 app.delete("/api/game/:gameId", (req, res) => {
-  const id = req.params.gameId;
-  const existed = games.delete(id);
-  res.json({ ok: true, deleted: existed });
+  const { g, error } = resolveGame(req.params.gameId);
+  if (!g) return res.status(404).json({ ok: false, error });
+
+  const existed = games.delete(g.id);
+  res.json({ ok: true, deleted: existed, gameId: g.id });
 });
 
 // create new game (now accepts { N, name })
@@ -370,8 +393,8 @@ app.post("/api/game/new", (req, res) => {
 
 // get game state
 app.get("/api/game/:gameId", (req, res) => {
-  const g = games.get(req.params.gameId);
-  if (!g) return res.status(404).json({ ok: false, error: "Game not found" });
+  const { g, error } = resolveGame(req.params.gameId);
+  if (!g) return res.status(404).json({ ok: false, error });
   res.json({ ok: true, state: gamePublicState(g) });
 });
 
@@ -382,8 +405,8 @@ app.post("/api/move", (req, res) => {
     return res.status(400).json({ ok: false, error: "Missing gameId/action" });
   }
 
-  const g = games.get(gameId);
-  if (!g) return res.status(404).json({ ok: false, error: "Game not found" });
+  const { g, error } = resolveGame(gameId);
+if (!g) return res.status(404).json({ ok: false, error });
 
   if (clientActionId && g.clientActions.has(clientActionId)) {
     return res.json(g.clientActions.get(clientActionId));
@@ -471,6 +494,6 @@ app.post("/api/move", (req, res) => {
    Startup
 ------------------------------ */
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Local server running at http://localhost:${PORT}`);
 });
