@@ -7,9 +7,7 @@ const ctx = canvas.getContext('2d');
 const turnPill = document.getElementById('turnPill');
 const statusPill = document.getElementById('statusPill');
 const passBtn = document.getElementById('passBtn');
-const resetBtn = document.getElementById('resetBtn');
-const sizeInput = document.getElementById('sizeInput');
-const applySizeBtn = document.getElementById('applySizeBtn');
+const gamesBtn = document.getElementById('gamesBtn');
 
 const margin = 10; // extra grid drawn around viewport
 
@@ -44,65 +42,14 @@ Util.other = function (p) {
   return p === 1 ? 2 : 1;
 };
 
-
-const controlsBar = resetBtn?.parentElement || document.body;
-
-let gameSelect = null;
-let refreshGamesBtn = null;
-
-Util.initGamePicker = function () {
-  if (gameSelect) return;
-
-  gameSelect = document.createElement('select');
-  gameSelect.id = 'gameSelect';
-  gameSelect.title = 'Active game';
-
-  refreshGamesBtn = document.createElement('button');
-  refreshGamesBtn.id = 'refreshGamesBtn';
-  refreshGamesBtn.textContent = 'Games';
-
-  // Insert before Reset so it’s in the same control row
-  controlsBar.insertBefore(refreshGamesBtn, resetBtn);
-  controlsBar.insertBefore(gameSelect, resetBtn);
-
-  // expose for events.js
-  window.gameSelect = gameSelect;
-  window.refreshGamesBtn = refreshGamesBtn;
-};
-
-Util.setGameList = function (games, currentId) {
-  if (!gameSelect) return;
-
-  const prev = gameSelect.value;
-
-  // clear
-  while (gameSelect.firstChild) gameSelect.removeChild(gameSelect.firstChild);
-
-  for (const g of games) {
-    const opt = document.createElement('option');
-    opt.value = g.gameId;
-
-    const shortId = g.gameId.slice(0, 6);
-    const phase = g.phase || 'play';
-    opt.textContent = `${shortId}  N${g.N}  r${g.rev}  ${phase}`;
-
-    gameSelect.appendChild(opt);
-  }
-
-  // select current if available, else keep previous if still present, else first.
-  const want = currentId || prev;
-  if (want && [...gameSelect.options].some(o => o.value === want)) {
-    gameSelect.value = want;
-  } else if (gameSelect.options.length) {
-    gameSelect.selectedIndex = 0;
-  }
-};
+// Lobby navigation
+if (gamesBtn) {
+  gamesBtn.addEventListener('click', () => {
+    window.location.href = '/';
+  });
+}
 
 // --- Absolute grid coordinate API ---
-// Absolute integer intersection: (ax, ay) on infinite plane.
-// Base board lookup: (bx, by) = wrap(ax), wrap(ay) in [0..N-1].
-// Tile index: (tx, ty) = floorDiv(ax, N), floorDiv(ay, N).
-
 Util.absToBase = function (ax, ay) {
   const bx = Util.wrap(ax);
   const by = Util.wrap(ay);
@@ -121,8 +68,8 @@ Util.baseToAbs = function (bx, by, tx = 0, ty = 0) {
 let viewW = 0;
 let viewH = 0;
 
-// Board size
-let N = Util.clampInt(parseInt(sizeInput.value || '19', 10), 5, 49);
+// Board size (authoritative value comes from server in net mode)
+let N = 19;
 
 // Zoom
 let cell = 34; // pixels per grid unit (intersection spacing)
@@ -144,7 +91,7 @@ let mouse = { x: 0, y: 0, over: null };
 // Render scheduling
 let rafPending = false;
 
-// Expose a few globals used by other files (classic script pattern)
+// Expose globals
 window.canvas = canvas;
 window.ctx = ctx;
 
@@ -168,7 +115,6 @@ window.mouse = mouse;
 
 window.rafPending = rafPending;
 
-// Keep exported globals in sync when we mutate local bindings
 Util._syncGlobals = function () {
   window.viewW = viewW;
   window.viewH = viewH;
@@ -210,7 +156,6 @@ Util.setTurnUI = function () {
   turnPill.textContent = `Turn: ${toMove === 1 ? 'Black' : 'White'}`;
 };
 
-// Hash board + toMove into a stable string
 Util.hashPosition = function (nextPlayer = toMove) {
   let s = '' + nextPlayer + '|';
   for (let y = 0; y < N; y++) s += board[y].join('') + ';';
@@ -240,7 +185,6 @@ Util.absFloatToNearest = function (axf, ayf) {
   return Util.absToBase(ax, ay);
 };
 
-// Mutators that affect exported globals
 Util.setBoardSize = function (n) {
   N = n;
   Util._syncGlobals();
@@ -262,12 +206,10 @@ Util.setToMove = function (p) {
   Util._syncGlobals();
 };
 
-// Client action id for idempotent server actions
 Util.newActionId = function () {
   if (window.crypto && typeof window.crypto.randomUUID === 'function') {
     return window.crypto.randomUUID();
   }
-  // fallback: 16 random bytes -> hex
   const buf = new Uint8Array(16);
   if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
     window.crypto.getRandomValues(buf);
@@ -283,9 +225,7 @@ Util.newActionId = function () {
 window.turnPill = turnPill;
 window.statusPill = statusPill;
 window.passBtn = passBtn;
-window.resetBtn = resetBtn;
-window.sizeInput = sizeInput;
-window.applySizeBtn = applySizeBtn;
+window.gamesBtn = gamesBtn;
 
 // Initial sync
 Util._syncGlobals();

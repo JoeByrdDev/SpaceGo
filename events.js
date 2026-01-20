@@ -1,4 +1,4 @@
-// events.js
+// events.js (only kept pass; removed reset/new-game UI + game dropdown wiring)
 window.Events = window.Events || {};
 
 Events.onPointerDown = function (e) {
@@ -22,7 +22,6 @@ Events.onPointerMove = function (e) {
   const sx = e.clientX - rect.left;
   const sy = e.clientY - rect.top;
 
-  // Hover updates even without left down
   mouse.x = sx;
   mouse.y = sy;
 
@@ -50,7 +49,6 @@ Events.onPointerMove = function (e) {
   const dx = (sx - dragStart.x) / cell;
   const dy = (sy - dragStart.y) / cell;
 
-  // Dragging the mouse right should move camera left (world follows hand)
   camAX = camStart.ax - dx;
   camAY = camStart.ay - dy;
 
@@ -75,69 +73,59 @@ Events.onPointerUp = function (e) {
 
   if (!wasDrag) {
     const absf = Util.screenToAbs(sx, sy);
-const near = Util.absFloatToNearest(absf.ax, absf.ay);
+    const near = Util.absFloatToNearest(absf.ax, absf.ay);
 
-if (Engine.getPhase && Engine.getPhase() === 'scoring') {
-  const r = Engine.toggleDeadAtAbs(near.ax, near.ay);
+    if (Engine.getPhase && Engine.getPhase() === 'scoring') {
+      const r = Engine.toggleDeadAtAbs(near.ax, near.ay);
+      if (!r.ok) {
+        if (r.reason !== 'Empty') Util.setStatus(r.reason);
+      }
+      Render.requestRender();
+      return;
+    }
 
-  // Clicking empty space during scoring is a no-op; keep the scoring status text.
-  if (!r.ok) {
-    if (r.reason !== 'Empty') Util.setStatus(r.reason);
-    // else do nothing
-  }
+    const r0 = (() => {
+      const s0 = { N, board, toMove, seen: Util.seen, phase: Engine.getPhase(), passStreak: 0 };
+      const { bx, by } = near;
+      return Engine.simulatePlayBase(bx, by, s0);
+    })();
 
-  Render.requestRender();
-  return;
-}
+    if (!r0.ok) {
+      Util.setStatus(r0.reason);
+      Render.requestRender();
+      return;
+    }
 
-// normal play path (unchanged)
-const r0 = (() => {
-  // local pre-validate using simulate, no mutation
-  const s0 = { N, board, toMove, seen: Util.seen, phase: Engine.getPhase(), passStreak: 0 };
-  const { bx, by } = near;
-  return Engine.simulatePlayBase(bx, by, s0);
-})();
+    if (!Engine.isNetMode || !Engine.isNetMode()) {
+      Engine.applyStateLocal(r0.next);
+      Util.setTurnUI();
+      Util.setStatus(r0.captured ? `Captured ${r0.captured}` : 'Placed');
+      Render.requestRender();
+      return;
+    }
 
-if (!r0.ok) {
-  Util.setStatus(r0.reason);
-  Render.requestRender();
-  return;
-}
+    if (Engine.isNetBusy && Engine.isNetBusy()) return;
 
-// If net mode is OFF: commit locally (old behavior, but via applyStateLocal)
-if (!Engine.isNetMode || !Engine.isNetMode()) {
-  Engine.applyStateLocal(r0.next);
-  Util.setTurnUI();
-  Util.setStatus(r0.captured ? `Captured ${r0.captured}` : 'Placed');
-  Render.requestRender();
-  return;
-}
+    Engine._setNetBusy(true);
+    Util.setStatus('Sending…');
+    Render.requestRender();
 
-// Net mode ON: ask server, apply authoritative state
-if (Engine.isNetBusy && Engine.isNetBusy()) return;
-
-Engine._setNetBusy(true);
-Util.setStatus('Sending…');
-Render.requestRender();
-
-Net.requestAction({
-  type: 'play',
-  ax: near.ax,
-  ay: near.ay,
-  // optional: include base coords too
-  bx: near.bx,
-  by: near.by,
-}).then((rr) => {
-  if (!rr.ok) Util.setStatus(rr.reason);
-  else Util.setStatus('Placed');
-  Util.setTurnUI();
-  Render.requestRender();
-}).finally(() => {
-  Engine._setNetBusy(false);
-});
+    Net.requestAction({
+      type: 'play',
+      ax: near.ax,
+      ay: near.ay,
+      bx: near.bx,
+      by: near.by,
+    }).then((rr) => {
+      if (!rr.ok) Util.setStatus(rr.reason);
+      else Util.setStatus('Placed');
+      Util.setTurnUI();
+      Render.requestRender();
+    }).finally(() => {
+      Engine._setNetBusy(false);
+    });
   }
 };
-
 
 Events.onPointerLeave = function () {
   if (mouse.over) {
@@ -156,7 +144,6 @@ Events.onWheel = function (e) {
   Render.requestRender();
 };
 
-// Optional: handle pointercancel cleanly (mobile / OS interruptions)
 Events.onPointerCancel = function () {
   dragging = false;
   dragMode = 'idle';
@@ -185,78 +172,6 @@ passBtn.addEventListener('click', async () => {
   }
 });
 
-resetBtn.addEventListener('click', async () => {
-  if (Engine.isNetMode && Engine.isNetMode()) {
-    Util.setStatus('New game…');
-    Render.requestRender();
-    const r = await Engine.newGame(N);
-    if (!r.ok) Util.setStatus(r.reason);
-    Render.requestRender();
-    return;
-  }
-  Engine.reset(N);
-});
-
-applySizeBtn.addEventListener('click', () => {
-  const n = Util.clampInt(parseInt(sizeInput.value || '19', 10), 5, 49);
-
-  if (Engine.isNetMode && Engine.isNetMode()) {
-    Util.setStatus('New board…');
-    Render.requestRender();
-    Engine.newGame(n).then((r) => {
-      if (!r.ok) Util.setStatus(r.reason);
-      Render.requestRender();
-    });
-    return;
-  }
-
-  Engine.reset(n);
-});
-
-Util.initGamePicker();
-
-async function refreshGameListAndSelectCurrent() {
-  if (!Engine.isNetMode || !Engine.isNetMode()) return;
-
-  const r = await Net.listGames();
-  if (!r.ok) {
-    Util.setStatus(r.reason);
-    return;
-  }
-
-  Util.setGameList(r.games, Net.gameId);
-}
-
-if (window.refreshGamesBtn) {
-  refreshGamesBtn.addEventListener('click', async () => {
-    await refreshGameListAndSelectCurrent();
-    Render.requestRender();
-  });
-}
-
-if (window.gameSelect) {
-  gameSelect.addEventListener('change', async () => {
-    if (!Engine.isNetMode || !Engine.isNetMode()) return;
-    if (Engine.isNetBusy && Engine.isNetBusy()) return;
-
-    const id = gameSelect.value;
-    if (!id) return;
-
-    Engine._setNetBusy(true);
-    Util.setStatus('Loading…');
-    Render.requestRender();
-
-    try {
-      const r = await Net.loadGame(id);
-      if (!r.ok) Util.setStatus(r.reason);
-      else Util.setStatus('Ready');
-    } finally {
-      Engine._setNetBusy(false);
-      Render.requestRender();
-    }
-  });
-}
-
 canvas.addEventListener('pointerdown', Events.onPointerDown);
 canvas.addEventListener('pointermove', Events.onPointerMove);
 canvas.addEventListener('pointerup', Events.onPointerUp);
@@ -264,10 +179,8 @@ canvas.addEventListener('pointerleave', Events.onPointerLeave);
 canvas.addEventListener('pointercancel', Events.onPointerCancel);
 canvas.addEventListener('wheel', Events.onWheel, { passive: false });
 
-// Disable default context menu on right click
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
-// Resize
 const shell = document.getElementById('game-shell');
 const ro = new ResizeObserver((entries) => {
   for (const entry of entries) {

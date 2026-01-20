@@ -88,7 +88,6 @@ function hashPosition({ board, toMove }) {
   // compact-ish stable encoding: toMove|rows separated by ;
   let s = "" + toMove + "|";
   for (let y = 0; y < board.length; y++) {
-    // join w/out commas to reduce chars: e.g. 001020...
     for (let x = 0; x < board.length; x++) s += board[y][x];
     s += ";";
   }
@@ -97,6 +96,9 @@ function hashPosition({ board, toMove }) {
 
 function gamePublicState(g) {
   return {
+    gameId: g.id,
+    name: g.name,
+    moveCount: g.moveCount,
     N: g.N,
     board: g.board,
     toMove: g.toMove,
@@ -106,12 +108,26 @@ function gamePublicState(g) {
     scoreResult: g.scoreResult,
     rev: g.rev,
     posHash: hashPosition(g),
+    createdAt: g.createdAt,
+    updatedAt: g.updatedAt,
   };
 }
 
-function createGame(N = 19) {
+function cleanName(name, fallback) {
+  const s = (name || "").toString().trim().replace(/\s+/g, " ");
+  if (!s) return fallback;
+  return s.slice(0, 60);
+}
+
+function createGame(N = 19, name = "") {
+  const id = newGameId();
+  const shortId = id.slice(0, 8);
+
   const g = {
-    id: newGameId(),
+    id,
+    name: cleanName(name, `Game ${shortId}`),
+    moveCount: 0,
+
     N,
     board: newBoard(N),
     toMove: 1,
@@ -230,14 +246,10 @@ function doPass(g) {
   g.toMove = other(g.toMove);
   g.passStreak += 1;
 
-  // After two consecutive passes: enter scoring (stub; your client can still do local scoring UI)
   if (g.passStreak >= 2) {
     g.phase = "scoring";
-    // scoreResult stays null until you implement server-side scoring;
-    // client can show scoring mode and dead toggles locally or via server in future.
   }
 
-  // superko tracking still matters: passing changes player-to-move
   const h = hashPosition(g);
   g.seen.add(h);
 
@@ -294,7 +306,6 @@ function doToggleDead(g, ax, ay) {
 function doFinalizeScoring(g) {
   if (g.phase !== "scoring") return { ok: false, reason: "Not scoring" };
 
-  // placeholder: you’ll replace with authoritative scoring later
   g.scoreResult = {
     blackStones: 0,
     whiteStones: 0,
@@ -313,19 +324,6 @@ function doFinalizeScoring(g) {
    API
 ------------------------------ */
 
-// server.js (additions)
-// Keep everything else the same. This just wires lobby + game page routes.
-// Existing server is express.static(__dirname) already. :contentReference[oaicite:0]{index=0}
-
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "lobby.html"));
-});
-
-// Optional: friendly game URL
-app.get("/game", (req, res) => {
-  res.sendFile(path.join(__dirname, "game.html"));
-});
-
 // health
 app.get("/api/health", (req, res) => {
   res.json({ ok: true, games: games.size });
@@ -336,6 +334,8 @@ app.get("/api/games", (req, res) => {
   for (const g of games.values()) {
     out.push({
       gameId: g.id,
+      name: g.name,
+      moveCount: g.moveCount,
       N: g.N,
       rev: g.rev,
       phase: g.phase,
@@ -354,13 +354,15 @@ app.delete("/api/game/:gameId", (req, res) => {
   res.json({ ok: true, deleted: existed });
 });
 
-// create new game
+// create new game (now accepts { N, name })
 app.post("/api/game/new", (req, res) => {
   const Nraw = req.body?.N ?? 19;
+  const name = req.body?.name ?? "";
+
   const N = Number(Nraw);
   const safeN = Number.isInteger(N) && N >= 3 && N <= 49 ? N : 19;
 
-  const g = createGame(safeN);
+  const g = createGame(safeN, name);
   games.set(g.id, g);
 
   res.json({ ok: true, gameId: g.id, state: gamePublicState(g) });
@@ -373,7 +375,7 @@ app.get("/api/game/:gameId", (req, res) => {
   res.json({ ok: true, state: gamePublicState(g) });
 });
 
-// single action endpoint (what your Net.requestAction should call)
+// single action endpoint
 app.post("/api/move", (req, res) => {
   const { gameId, action, rev, clientActionId } = req.body || {};
   if (!gameId || !action || !action.type) {
@@ -383,12 +385,10 @@ app.post("/api/move", (req, res) => {
   const g = games.get(gameId);
   if (!g) return res.status(404).json({ ok: false, error: "Game not found" });
 
-  // Idempotency: return cached payload for duplicates.
   if (clientActionId && g.clientActions.has(clientActionId)) {
     return res.json(g.clientActions.get(clientActionId));
   }
 
-  // Revision gate.
   if (!Number.isInteger(rev) || rev !== g.rev) {
     return res.status(409).json({
       ok: false,
@@ -401,7 +401,6 @@ app.post("/api/move", (req, res) => {
   const t = action.type;
 
   if (t === "play") {
-    // accept either ax/ay or bx/by. ax/ay are “absolute”.
     const ax = Number.isFinite(action.ax) ? action.ax : action.bx;
     const ay = Number.isFinite(action.ay) ? action.ay : action.by;
     if (!Number.isFinite(ax) || !Number.isFinite(ay)) {
@@ -425,7 +424,6 @@ app.post("/api/move", (req, res) => {
   } else if (t === "finalizeScore") {
     r = doFinalizeScoring(g);
   } else if (t === "resign") {
-    // simple: mark scoring + set result note
     g.phase = "scoring";
     g.scoreResult = { note: `${action.player || "A player"} resigned` };
     g.updatedAt = nowMs();
@@ -434,7 +432,9 @@ app.post("/api/move", (req, res) => {
     return res.status(400).json({ ok: false, error: "Unknown action type" });
   }
 
- let payload;
+  const countsAsMove = (t === "play" || t === "pass");
+
+  let payload;
   if (!r.ok) {
     payload = {
       ok: true,
@@ -443,8 +443,11 @@ app.post("/api/move", (req, res) => {
       state: gamePublicState(g),
     };
   } else {
+    if (countsAsMove) g.moveCount += 1;
+
     g.rev += 1;
     g.updatedAt = nowMs();
+
     payload = {
       ok: true,
       accepted: true,
