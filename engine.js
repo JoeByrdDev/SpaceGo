@@ -428,6 +428,43 @@ Engine.collectGroupStonesOnly = function(x, y) {
   return { color, stones };
 };
 
+// Create a brand-new server game with board size n, then swap Net.gameId + state
+Engine.newGame = async function (n = N) {
+  const safeN = Util.clampInt(Number.parseInt(n, 10), 5, 49);
+
+  // offline/local fallback
+  if (!Engine.isNetMode || !Engine.isNetMode()) {
+    Engine.reset(safeN);
+    return { ok: true };
+  }
+
+  if (Engine.isNetBusy && Engine.isNetBusy()) return { ok: false, reason: 'Busy' };
+
+  Engine._setNetBusy(true);
+  try {
+    const r = await fetch('/api/game/new', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ N: safeN }),
+    });
+
+    const data = await r.json();
+    if (!r.ok || !data?.ok) return { ok: false, reason: data?.error || `HTTP ${r.status}` };
+
+    Net.gameId = data.gameId;
+    if (data.state) Net.applyState(data.state);
+
+    Util.setStatus('Ready');
+    Render.requestRender();
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: e?.message || 'Network error' };
+  } finally {
+    Engine._setNetBusy(false);
+  }
+};
+
+
 // --- scoring: modify computeScore to use Engine.valueForScoring and to emit ownership ---
 Engine.computeScore = function() {
   let blackStones = 0, whiteStones = 0;

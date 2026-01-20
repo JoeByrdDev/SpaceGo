@@ -186,25 +186,19 @@ passBtn.addEventListener('click', async () => {
 });
 
 resetBtn.addEventListener('click', async () => {
+  // Always create a fresh server game when net mode is on
   if (Engine.isNetMode && Engine.isNetMode()) {
-    if (Engine.isNetBusy && Engine.isNetBusy()) return;
-    Engine._setNetBusy(true);
-    Util.setStatus('Resetting…');
-    Render.requestRender();
-    try {
-      const r = await Net.requestAction({ type: 'reset', N });
-      if (!r.ok) Util.setStatus(r.reason);
-    } finally {
-      Engine._setNetBusy(false);
-      Render.requestRender();
-    }
-  } else {
-    Engine.reset(N);
+    const r = await Engine.newGame(N);
+    if (!r.ok) Util.setStatus(r.reason);
+    return;
   }
+  Engine.reset(N);
 });
-applySizeBtn.addEventListener('click', () => {
+
+applySizeBtn.addEventListener('click', async () => {
   const n = Util.clampInt(parseInt(sizeInput.value || '19', 10), 5, 49);
-  Engine.reset(n);
+  const r = await Engine.newGame(n);
+  if (!r.ok) Util.setStatus(r.reason);
 });
 
 canvas.addEventListener('pointerdown', Events.onPointerDown);
