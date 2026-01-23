@@ -4,13 +4,135 @@ import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 
+import cookieParser from "cookie-parser";
+import admin from "firebase-admin";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 8080;
 
+
+
+
+
 app.use(express.json());
+app.use(cookieParser());
+
+app.set("trust proxy", 1);
+
+const SESSION_COOKIE_NAME = "sg_session";
+const SESSION_EXPIRES_MS = 1000 * 60 * 60 * 24 * 7; // 7 days (Firebase session cookies support up to 14 days)
+
+
+const PROJECT_ID =
+  process.env.FIREBASE_PROJECT_ID ||
+  process.env.GOOGLE_CLOUD_PROJECT ||
+  process.env.GCLOUD_PROJECT ||
+  "spacego-fff13";
+
+admin.initializeApp({
+  credential: admin.credential.applicationDefault(),
+  ...(PROJECT_ID ? { projectId: PROJECT_ID } : {}),
+});
+
+
+// For local HTTP dev, Secure cookies won't set.
+// Either run local HTTPS, or allow insecure cookies only on localhost.
+function isHttps(req) {
+  return (
+    req.secure ||
+    req.headers["x-forwarded-proto"] === "https" ||
+    req.headers["x-forwarded-ssl"] === "on"
+  );
+}
+
+function sessionCookieOptions(req) {
+  const secure = isHttps(req) && process.env.NODE_ENV !== "development";
+  return {
+    httpOnly: true,
+    secure,
+    sameSite: "lax",
+    path: "/",
+    maxAge: SESSION_EXPIRES_MS,
+  };
+}
+
+// Basic CSRF guard for cookie-authenticated POST/PUT/DELETE.
+// Works well when frontend + API are same-origin.
+function requireSameOrigin(req, res, next) {
+  const origin = req.headers.origin;
+  if (!origin) return next();
+  const expected = `${req.protocol}://${req.get("host")}`;
+  if (origin !== expected) return res.status(403).json({ error: "bad origin" });
+  return next();
+}
+
+async function authFromSessionCookie(req, res, next) {
+  const cookie = req.cookies[SESSION_COOKIE_NAME];
+  if (!cookie) {
+    req.user = null;
+    return next();
+  }
+
+  try {
+    // checkRevoked=true is safest; costs an extra lookup.
+    const decoded = await admin.auth().verifySessionCookie(cookie, true);
+    req.user = {
+      uid: decoded.uid,
+      claims: decoded,
+    };
+    return next();
+  } catch {
+    req.user = null;
+    return next();
+  }
+}
+
+app.use(authFromSessionCookie);
+
+
+// Client sends Firebase ID token after email/password sign-in.
+// Server verifies token and sets HttpOnly session cookie.
+app.post("/api/sessionLogin", requireSameOrigin, async (req, res) => {
+  const idToken = req.body?.idToken;
+  if (!idToken) return res.status(400).json({ error: "missing idToken" });
+
+  try {
+    // Optional: verify first so you can reject disabled users, etc.
+    const decoded = await admin.auth().verifyIdToken(idToken);
+
+    const sessionCookie = await admin.auth().createSessionCookie(idToken, {
+      expiresIn: SESSION_EXPIRES_MS,
+    });
+
+    res.cookie(SESSION_COOKIE_NAME, sessionCookie, sessionCookieOptions(req));
+    return res.json({ ok: true, uid: decoded.uid });
+  } catch (e) {
+    return res.status(401).json({ error: "invalid token" });
+  }
+});
+
+// Clears cookie. If you want "log out everywhere", revoke refresh tokens too.
+app.post("/api/sessionLogout", requireSameOrigin, async (req, res) => {
+  res.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
+
+  // Optional: global sign-out (forces session invalidation after revocation is checked)
+  if (req.user?.uid) await admin.auth().revokeRefreshTokens(req.user.uid);
+
+  return res.json({ ok: true });
+});
+
+// Convenience: see who server thinks you are
+app.get("/api/whoami", (req, res) => {
+  if (!req.user) return res.json({ authed: false });
+  return res.json({ authed: true, uid: req.user.uid });
+});
+
+
+
+
 
 // serve lobby on /
 app.get("/", (req, res) => {

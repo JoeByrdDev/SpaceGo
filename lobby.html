@@ -69,6 +69,39 @@
 <body>
   <div class="wrap">
     <div class="card">
+	
+	
+	
+	
+	<div style="border:1px solid #333; padding:10px; margin:10px 0;">
+  <div>
+    <input id="authEmail" type="email" placeholder="email" />
+    <input id="authPass" type="password" placeholder="password" />
+  </div>
+  <div style="margin-top:8px;">
+    <button id="authLogin">Login</button>
+    <button id="authSignup">Sign up</button>
+    <button id="authLogout">Logout</button>
+    <span id="authStatus" style="margin-left:10px;"></span>
+  </div>
+</div>
+
+<script type="module">
+  import { wireAuthUI } from "./auth_client.js";
+
+  wireAuthUI({
+    emailEl: document.getElementById("authEmail"),
+    passEl: document.getElementById("authPass"),
+    statusEl: document.getElementById("authStatus"),
+    btnLogin: document.getElementById("authLogin"),
+    btnSignup: document.getElementById("authSignup"),
+    btnLogout: document.getElementById("authLogout"),
+  });
+</script>
+
+
+
+
       <h1>Lobby</h1>
       <div class="muted">Create a game (named), or click an existing game to open it.</div>
 
