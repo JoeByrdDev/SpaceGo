@@ -3,6 +3,7 @@ import express from "express";
 import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
+import { createClient } from "redis";
 
 import cookieParser from "cookie-parser";
 import admin from "firebase-admin";
@@ -36,6 +37,14 @@ admin.initializeApp({
   credential: admin.credential.applicationDefault(),
   ...(PROJECT_ID ? { projectId: PROJECT_ID } : {}),
 });
+
+
+const REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
+const rdb = createClient({ url: REDIS_URL });
+
+rdb.on("error", (err) => console.error("redis error", err));
+
+await rdb.connect(); // node ESM top-level await is fine
 
 
 // For local HTTP dev, Secure cookies won't set.
@@ -154,28 +163,94 @@ app.use(express.static(__dirname, { index: false }));
    In-memory game store (dev)
 ------------------------------ */
 
-const games = new Map(); // gameId -> Game
+const K = {
+  game: (id) => `sg:game:${id}`,
+  updated: `sg:games:updated`,
+  short: (shortId) => `sg:short:${shortId}`,
+  actions: (id) => `sg:actions:${id}`,
+  actionsOrder: (id) => `sg:actions_order:${id}`,
+};
 
-function resolveGame(idOrPrefix) {
+async function rgetJson(key) {
+  const raw = await rdb.get(key);
+  return raw ? JSON.parse(raw) : null;
+}
+
+async function rsetJson(key, obj) {
+  await rdb.set(key, JSON.stringify(obj));
+}
+
+async function cacheAction(gameId, clientActionId, payload) {
+  if (!clientActionId) return;
+
+  const hkey = K.actions(gameId);
+  const lkey = K.actionsOrder(gameId);
+
+  // write payload
+  await rdb.hSet(hkey, clientActionId, JSON.stringify(payload));
+
+  // cap at 300 (mirror your old behavior)
+  await rdb.lPush(lkey, clientActionId);
+  await rdb.lTrim(lkey, 0, 299);
+
+  // best-effort cleanup: anything beyond 300 gets removed from hash
+  const overflow = await rdb.lRange(lkey, 300, 400); // small slice is enough
+  if (overflow.length) {
+    await rdb.lTrim(lkey, 0, 299);
+    await rdb.hDel(hkey, overflow);
+  }
+}
+
+async function getCachedAction(gameId, clientActionId) {
+  if (!clientActionId) return null;
+  const raw = await rdb.hGet(K.actions(gameId), clientActionId);
+  return raw ? JSON.parse(raw) : null;
+}
+
+
+async function saveGame(g) {
+  await rsetJson(K.game(g.id), g);
+  await rdb.zAdd(K.updated, [{ score: g.updatedAt || nowMs(), value: g.id }]);
+  await rdb.set(K.short(g.id.slice(0, 8)), g.id);
+}
+
+async function loadGameExact(id) {
+  return await rgetJson(K.game(id));
+}
+
+// Keep your “open by prefix” behavior from resolveGame() :contentReference[oaicite:4]{index=4}.
+// Fast path: 8-char short id. Fallback: scan known ids (fine at this stage).
+async function resolveGame(idOrPrefix) {
   if (!idOrPrefix) return { g: null, error: "Missing id" };
 
-  // exact match first
-  const exact = games.get(idOrPrefix);
+  const raw = String(idOrPrefix).trim();
+  if (!raw) return { g: null, error: "Missing id" };
+
+  // exact
+  const exact = await loadGameExact(raw);
   if (exact) return { g: exact };
 
-  // allow short prefix (like the 8-char lobby display)
-  const prefix = String(idOrPrefix).trim();
-  if (prefix.length < 4) return { g: null, error: "Id too short" };
-
-  const matches = [];
-  for (const g of games.values()) {
-    if (g.id.startsWith(prefix)) matches.push(g);
+  // short id mapping (8 chars)
+  if (raw.length === 8) {
+    const full = await rdb.get(K.short(raw));
+    if (full) {
+      const g = await loadGameExact(full);
+      if (g) return { g };
+    }
   }
 
-  if (matches.length === 1) return { g: matches[0] };
+  // fallback: prefix scan against ids in zset
+  if (raw.length < 4) return { g: null, error: "Id too short" };
+
+  const ids = await rdb.zRange(K.updated, 0, 500, { REV: true });
+  const matches = [];
+  for (const id of ids) if (id.startsWith(raw)) matches.push(id);
+
+  if (matches.length === 1) return { g: await loadGameExact(matches[0]) };
   if (matches.length === 0) return { g: null, error: "Game not found" };
   return { g: null, error: "Ambiguous id (multiple matches)" };
 }
+
 
 
 function nowMs() {
@@ -238,23 +313,24 @@ function hashPosition({ board, toMove }) {
   return fnv1a64(s);
 }
 
-function gamePublicState(g) {
-  return {
-    gameId: g.id,
-    name: g.name,
-    moveCount: g.moveCount,
-    N: g.N,
-    board: g.board,
-    toMove: g.toMove,
-    phase: g.phase,
-    passStreak: g.passStreak,
-    deadSet: Array.from(g.deadSet),
-    scoreResult: g.scoreResult,
-    rev: g.rev,
-    posHash: hashPosition(g),
-    createdAt: g.createdAt,
-    updatedAt: g.updatedAt,
-  };
+function deadHas(g, k) {
+  return (g.deadSet || []).includes(k);
+}
+function deadAdd(g, k) {
+  if (!g.deadSet) g.deadSet = [];
+  if (!g.deadSet.includes(k)) g.deadSet.push(k);
+}
+function deadDel(g, k) {
+  if (!g.deadSet) return;
+  g.deadSet = g.deadSet.filter((x) => x !== k);
+}
+
+function seenHas(g, h) {
+  return (g.seen || []).includes(h);
+}
+function seenAdd(g, h) {
+  if (!g.seen) g.seen = [];
+  if (!g.seen.includes(h)) g.seen.push(h);
 }
 
 function cleanName(name, fallback) {
@@ -277,18 +353,40 @@ function createGame(N = 19, name = "") {
     toMove: 1,
     phase: "play",
     passStreak: 0,
-    deadSet: new Set(),
+
+    deadSet: [],        // array of "x,y"
     scoreResult: null,
     rev: 0,
-    clientActions: new Map(), // clientActionId -> response payload
-    seen: new Set(),
+
+    seen: [],           // array of position hashes
+
     createdAt: nowMs(),
     updatedAt: nowMs(),
   };
 
-  g.seen.add(hashPosition(g));
+  g.seen.push(hashPosition(g));
   return g;
 }
+
+function gamePublicState(g) {
+  return {
+    gameId: g.id,
+    name: g.name,
+    moveCount: g.moveCount,
+    N: g.N,
+    board: g.board,
+    toMove: g.toMove,
+    phase: g.phase,
+    passStreak: g.passStreak,
+    deadSet: g.deadSet || [],
+    scoreResult: g.scoreResult,
+    rev: g.rev,
+    posHash: hashPosition(g),
+    createdAt: g.createdAt,
+    updatedAt: g.updatedAt,
+  };
+}
+
 
 /* -----------------------------
    Rules: play + superko
@@ -369,16 +467,16 @@ function tryPlay(g, ax, ay) {
   // superko: check resulting position with next player to move
   const nextToMove = opp;
   const nextHash = hashPosition({ board: b, toMove: nextToMove });
-  if (g.seen.has(nextHash)) return { ok: false, reason: "Superko" };
+  if (seenHas(g, nextHash)) return { ok: false, reason: "Superko" };
 
   // commit
   g.board = b;
   g.toMove = nextToMove;
   g.passStreak = 0;
-  g.deadSet.clear();
+  g.deadSet = [];
   g.scoreResult = null;
 
-  g.seen.add(nextHash);
+  seenAdd(g, nextHash);
   g.updatedAt = nowMs();
 
   return { ok: true, captured };
@@ -395,7 +493,7 @@ function doPass(g) {
   }
 
   const h = hashPosition(g);
-  g.seen.add(h);
+  seenAdd(g, h);
 
   g.updatedAt = nowMs();
   return { ok: true };
@@ -408,10 +506,9 @@ function doReset(g, N) {
   g.toMove = 1;
   g.phase = "play";
   g.passStreak = 0;
-  g.deadSet.clear();
+  g.deadSet = [];
   g.scoreResult = null;
-  g.seen = new Set();
-  g.seen.add(hashPosition(g));
+  g.seen = [hashPosition(g)];
   g.updatedAt = nowMs();
   return { ok: true };
 }
@@ -421,7 +518,7 @@ function doSetPhase(g, phase) {
   g.phase = phase;
   if (phase === "play") {
     g.passStreak = 0;
-    g.deadSet.clear();
+    g.deadSet = [];
     g.scoreResult = null;
   }
   g.updatedAt = nowMs();
@@ -440,12 +537,13 @@ function doToggleDead(g, ax, ay) {
   if (v === 0) return { ok: false, reason: "Empty" };
 
   const k = x + "," + y;
-  if (g.deadSet.has(k)) g.deadSet.delete(k);
-  else g.deadSet.add(k);
+  if (deadHas(g, k)) deadDel(g, k);
+  else deadAdd(g, k);
 
   g.updatedAt = nowMs();
   return { ok: true };
 }
+
 
 function doFinalizeScoring(g) {
   if (g.phase !== "scoring") return { ok: false, reason: "Not scoring" };
@@ -469,13 +567,19 @@ function doFinalizeScoring(g) {
 ------------------------------ */
 
 // health
-app.get("/api/health", (req, res) => {
-  res.json({ ok: true, games: games.size });
+app.get("/api/health", async (req, res) => {
+  const count = await rdb.zCard(K.updated);
+  res.json({ ok: true, games: count });
 });
 
-app.get("/api/games", (req, res) => {
+
+app.get("/api/games", async (req, res) => {
+  const ids = await rdb.zRange(K.updated, 0, 200, { REV: true });
   const out = [];
-  for (const g of games.values()) {
+
+  for (const id of ids) {
+    const g = await loadGameExact(id);
+    if (!g) continue;
     out.push({
       gameId: g.id,
       name: g.name,
@@ -487,20 +591,28 @@ app.get("/api/games", (req, res) => {
       updatedAt: g.updatedAt,
     });
   }
-  out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
   res.json({ ok: true, games: out });
 });
 
-app.delete("/api/game/:gameId", (req, res) => {
-  const { g, error } = resolveGame(req.params.gameId);
+
+app.delete("/api/game/:gameId", async (req, res) => {
+  const { g, error } = await resolveGame(req.params.gameId);
   if (!g) return res.status(404).json({ ok: false, error });
 
-  const existed = games.delete(g.id);
-  res.json({ ok: true, deleted: existed, gameId: g.id });
+  await rdb.del(K.game(g.id));
+  await rdb.zRem(K.updated, g.id);
+  await rdb.del(K.short(g.id.slice(0, 8)));
+
+  // cleanup action cache
+  await rdb.del(K.actions(g.id));
+  await rdb.del(K.actionsOrder(g.id));
+
+  res.json({ ok: true, deleted: true, gameId: g.id });
 });
 
 // create new game (now accepts { N, name })
-app.post("/api/game/new", (req, res) => {
+app.post("/api/game/new", async (req, res) => {
   const Nraw = req.body?.N ?? 19;
   const name = req.body?.name ?? "";
 
@@ -508,38 +620,48 @@ app.post("/api/game/new", (req, res) => {
   const safeN = Number.isInteger(N) && N >= 3 && N <= 49 ? N : 19;
 
   const g = createGame(safeN, name);
-  games.set(g.id, g);
+  await saveGame(g);
 
   res.json({ ok: true, gameId: g.id, state: gamePublicState(g) });
 });
 
 // get game state
-app.get("/api/game/:gameId", (req, res) => {
-  const { g, error } = resolveGame(req.params.gameId);
+app.get("/api/game/:gameId", async (req, res) => {
+  const { g, error } = await resolveGame(req.params.gameId);
   if (!g) return res.status(404).json({ ok: false, error });
   res.json({ ok: true, state: gamePublicState(g) });
 });
 
 // single action endpoint
-app.post("/api/move", (req, res) => {
+app.post("/api/move", async (req, res) => {
   const { gameId, action, rev, clientActionId } = req.body || {};
   if (!gameId || !action || !action.type) {
     return res.status(400).json({ ok: false, error: "Missing gameId/action" });
   }
 
-  const { g, error } = resolveGame(gameId);
-if (!g) return res.status(404).json({ ok: false, error });
+  // idempotency
+  const cached = await getCachedAction(gameId, clientActionId);
+  if (cached) return res.json(cached);
 
-  if (clientActionId && g.clientActions.has(clientActionId)) {
-    return res.json(g.clientActions.get(clientActionId));
+  // resolve
+  const resolved = await resolveGame(gameId);
+  if (!resolved.g) return res.status(404).json({ ok: false, error: resolved.error });
+  const id = resolved.g.id;
+
+  const key = K.game(id);
+
+  // WATCH for concurrent writers
+  await rdb.watch(key);
+
+  let g = await rgetJson(key);
+  if (!g) {
+    await rdb.unwatch();
+    return res.status(404).json({ ok: false, error: "Game not found" });
   }
 
   if (!Number.isInteger(rev) || rev !== g.rev) {
-    return res.status(409).json({
-      ok: false,
-      error: "Out of date",
-      state: gamePublicState(g),
-    });
+    await rdb.unwatch();
+    return res.status(409).json({ ok: false, error: "Out of date", state: gamePublicState(g) });
   }
 
   let r;
@@ -549,6 +671,7 @@ if (!g) return res.status(404).json({ ok: false, error });
     const ax = Number.isFinite(action.ax) ? action.ax : action.bx;
     const ay = Number.isFinite(action.ay) ? action.ay : action.by;
     if (!Number.isFinite(ax) || !Number.isFinite(ay)) {
+      await rdb.unwatch();
       return res.status(400).json({ ok: false, error: "Missing coordinates" });
     }
     r = tryPlay(g, ax, ay);
@@ -560,9 +683,9 @@ if (!g) return res.status(404).json({ ok: false, error });
   } else if (t === "setPhase") {
     r = doSetPhase(g, action.phase);
   } else if (t === "toggleDead") {
-    const ax = action.ax;
-    const ay = action.ay;
+    const ax = action.ax, ay = action.ay;
     if (!Number.isFinite(ax) || !Number.isFinite(ay)) {
+      await rdb.unwatch();
       return res.status(400).json({ ok: false, error: "Missing coordinates" });
     }
     r = doToggleDead(g, ax, ay);
@@ -574,6 +697,7 @@ if (!g) return res.status(404).json({ ok: false, error });
     g.updatedAt = nowMs();
     r = { ok: true };
   } else {
+    await rdb.unwatch();
     return res.status(400).json({ ok: false, error: "Unknown action type" });
   }
 
@@ -581,41 +705,37 @@ if (!g) return res.status(404).json({ ok: false, error });
 
   let payload;
   if (!r.ok) {
-    payload = {
-      ok: true,
-      accepted: false,
-      reason: r.reason || "Rejected",
-      state: gamePublicState(g),
-    };
+    payload = { ok: true, accepted: false, reason: r.reason || "Rejected", state: gamePublicState(g) };
   } else {
     if (countsAsMove) g.moveCount += 1;
-
     g.rev += 1;
     g.updatedAt = nowMs();
 
-    payload = {
-      ok: true,
-      accepted: true,
-      meta: { captured: r.captured || 0 },
-      state: gamePublicState(g),
-    };
+    payload = { ok: true, accepted: true, meta: { captured: r.captured || 0 }, state: gamePublicState(g) };
   }
 
-  if (clientActionId) {
-    g.clientActions.set(clientActionId, payload);
-    while (g.clientActions.size > 300) {
-      const oldestKey = g.clientActions.keys().next().value;
-      g.clientActions.delete(oldestKey);
-    }
+  // transaction commit
+  const multi = rdb.multi();
+  multi.set(key, JSON.stringify(g));
+  multi.zAdd(K.updated, [{ score: g.updatedAt || nowMs(), value: g.id }]);
+  multi.set(K.short(g.id.slice(0, 8)), g.id);
+
+  const execRes = await multi.exec(); // null => watched key changed
+  if (execRes === null) {
+    // someone else wrote first; return authoritative
+    const fresh = await rgetJson(key);
+    return res.status(409).json({ ok: false, error: "Out of date", state: gamePublicState(fresh || g) });
   }
 
+  await cacheAction(g.id, clientActionId, payload);
   return res.json(payload);
 });
+
 
 /* -----------------------------
    Startup
 ------------------------------ */
 
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '127.0.0.1', () => {
   console.log(`Local server running at http://localhost:${PORT}`);
 });
