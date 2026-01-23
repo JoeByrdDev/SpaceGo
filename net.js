@@ -128,3 +128,90 @@ Net.cancel = function () {
   if (inFlight) inFlight.abort();
 };
 
+// --- WebSocket live updates (read-path) ---
+let ws = null;
+let wsGameId = null;
+let wsRetry = 0;
+let wsClosedByUs = false;
+
+function wsUrlFor(gameId) {
+  const proto = (location.protocol === 'https:') ? 'wss:' : 'ws:';
+  // Net.baseUrl '' means same origin; if you set Net.baseUrl, we still connect same origin for now.
+  const host = location.host;
+  return `${proto}//${host}/ws?gameId=${encodeURIComponent(gameId)}`;
+}
+
+function wsBackoffMs() {
+  // 250ms, 500ms, 1s, 2s, 4s, 8s cap
+  const ms = 250 * Math.pow(2, Math.min(5, wsRetry));
+  return Math.min(8000, ms);
+}
+
+Net.connect = function (gameId) {
+  if (!gameId) return;
+  wsGameId = gameId;
+  wsClosedByUs = false;
+
+  // already connected to same game
+  if (ws && ws.readyState === WebSocket.OPEN && wsGameId === gameId) return;
+
+  // drop any prior socket
+  try { ws?.close(); } catch {}
+  ws = null;
+
+  const url = wsUrlFor(gameId);
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    wsRetry = 0;
+    // optional: tell server we want a resync (server already pushes on connect)
+    try { ws.send(JSON.stringify({ type: 'hello', rev: Net.rev })); } catch {}
+  };
+
+  ws.onmessage = (ev) => {
+    let msg = null;
+    try { msg = JSON.parse(ev.data); } catch {}
+    if (!msg) return;
+
+    if (msg.type === 'state' && msg.state) {
+      // authoritative update from server
+      Net.applyState(msg.state);
+      return;
+    }
+
+    if (msg.type === 'deleted') {
+      Util.setStatus('Game deleted');
+      // bounce to lobby
+      window.location.href = '/';
+      return;
+    }
+
+    if (msg.type === 'error') {
+      Util.setStatus(msg.error || 'WS error');
+      return;
+    }
+  };
+
+  ws.onclose = () => {
+    ws = null;
+    if (wsClosedByUs) return;
+    wsRetry++;
+    setTimeout(() => {
+      if (!wsClosedByUs && wsGameId) Net.connect(wsGameId);
+    }, wsBackoffMs());
+  };
+
+  ws.onerror = () => {
+    // close triggers reconnect
+    try { ws?.close(); } catch {}
+  };
+};
+
+Net.disconnect = function () {
+  wsClosedByUs = true;
+  wsGameId = null;
+  if (ws) {
+    try { ws.close(); } catch {}
+    ws = null;
+  }
+};

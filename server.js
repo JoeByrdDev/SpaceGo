@@ -4,6 +4,8 @@ import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createClient } from "redis";
+import http from "http";
+import { WebSocketServer } from "ws";
 
 import cookieParser from "cookie-parser";
 import admin from "firebase-admin";
@@ -158,6 +160,86 @@ app.get("/game", (req, res) => {
 
 // IMPORTANT: disable static index fallback so "/" doesn't auto-serve index.html
 app.use(express.static(__dirname, { index: false }));
+
+// --- WebSocket fanout (read-path) ---
+const server = http.createServer(app);
+
+// gameId -> Set(ws)
+const wsSubs = new Map();
+
+function subAdd(gameId, ws) {
+  if (!wsSubs.has(gameId)) wsSubs.set(gameId, new Set());
+  wsSubs.get(gameId).add(ws);
+}
+function subDel(gameId, ws) {
+  const set = wsSubs.get(gameId);
+  if (!set) return;
+  set.delete(ws);
+  if (set.size === 0) wsSubs.delete(gameId);
+}
+
+function wsSend(ws, obj) {
+  if (ws.readyState !== ws.OPEN) return;
+  try { ws.send(JSON.stringify(obj)); } catch {}
+}
+
+function publishGame(g) {
+  const set = wsSubs.get(g.id);
+  if (!set || set.size === 0) return;
+  const state = gamePublicState(g);
+  const msg = { type: "state", state };
+  for (const ws of set) wsSend(ws, msg);
+}
+
+const wss = new WebSocketServer({ server, path: "/ws" });
+
+wss.on("connection", async (ws, req) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const idOrPrefix = url.searchParams.get("gameId") || "";
+  const { g } = await resolveGame(idOrPrefix);
+
+  if (!g) {
+    wsSend(ws, { type: "error", error: "Game not found" });
+    ws.close();
+    return;
+  }
+
+  const gameId = g.id;
+  subAdd(gameId, ws);
+
+  // immediately send authoritative state snapshot
+  wsSend(ws, { type: "state", state: gamePublicState(g) });
+
+  ws.on("close", () => subDel(gameId, ws));
+  ws.on("error", () => subDel(gameId, ws));
+
+  // keepalive
+  ws.isAlive = true;
+  ws.on("pong", () => { ws.isAlive = true; });
+
+  // (optional) allow client to request a resync
+  ws.on("message", async (buf) => {
+    let m = null;
+    try { m = JSON.parse(buf.toString("utf8")); } catch {}
+    if (!m) return;
+    if (m.type === "resync") {
+      const fresh = await loadGameExact(gameId);
+      if (fresh) wsSend(ws, { type: "state", state: gamePublicState(fresh) });
+    }
+  });
+});
+
+// heartbeat
+const hb = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.isAlive === false) { try { ws.terminate(); } catch {} continue; }
+    ws.isAlive = false;
+    try { ws.ping(); } catch {}
+  }
+}, 30_000);
+
+wss.on("close", () => clearInterval(hb));
+
 
 /* -----------------------------
    In-memory game store (dev)
@@ -621,6 +703,7 @@ app.post("/api/game/new", async (req, res) => {
 
   const g = createGame(safeN, name);
   await saveGame(g);
+  publishGame(g);
 
   res.json({ ok: true, gameId: g.id, state: gamePublicState(g) });
 });
@@ -727,6 +810,7 @@ app.post("/api/move", async (req, res) => {
     return res.status(409).json({ ok: false, error: "Out of date", state: gamePublicState(fresh || g) });
   }
 
+  publishGame(g);
   await cacheAction(g.id, clientActionId, payload);
   return res.json(payload);
 });
@@ -736,6 +820,6 @@ app.post("/api/move", async (req, res) => {
    Startup
 ------------------------------ */
 
-app.listen(PORT, '127.0.0.1', () => {
+server.listen(PORT, "127.0.0.1", () => {
   console.log(`Local server running at http://localhost:${PORT}`);
 });

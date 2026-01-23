@@ -15,6 +15,8 @@ Util.rememberPosition();
       return;
     }
     await Net.loadGame(wantId);
+    Net.connect(wantId);
+    window.addEventListener('beforeunload', () => Net.disconnect());
   }
 
   Util.setTurnUI();
