@@ -17,9 +17,6 @@ const app = express();
 const PORT = 8080;
 
 
-
-
-
 app.use(express.json());
 app.use(cookieParser());
 
@@ -47,6 +44,52 @@ const rdb = createClient({ url: REDIS_URL });
 rdb.on("error", (err) => console.error("redis error", err));
 
 await rdb.connect(); // node ESM top-level await is fine
+
+// rateLimit.js (or inline in server.js)
+
+const NOW = () => Math.floor(Date.now() / 1000);
+
+export function rateLimit({
+  capacity,
+  refillPerSec,
+  keyFn
+}) {
+  return async (req, res, next) => {
+    const keyId = keyFn(req);
+    const key = `rl:${keyId}`;
+    const now = NOW();
+
+    // Lua-free version (fast enough at your scale)
+    const data = await rdb.hGetAll(key);
+
+    let tokens = data.tokens ? Number(data.tokens) : capacity;
+    let lastTs = data.ts ? Number(data.ts) : now;
+	
+	if (!Number.isFinite(tokens)) tokens = capacity;
+	if (!Number.isFinite(lastTs)) lastTs = now;
+
+    const delta = Math.max(0, now - lastTs);
+    tokens = Math.min(capacity, tokens + delta * refillPerSec);
+	if (!Number.isFinite(tokens)) tokens = capacity;
+
+    if (tokens < 1) {
+      res.status(429).json({ error: "rate_limited" });
+      return;
+    }
+
+    tokens -= 1;
+
+    await rdb.hSet(key, {
+      tokens: tokens.toString(),
+      ts: now.toString()
+    });
+
+    // expire idle buckets
+    await rdb.expire(key, Math.ceil(capacity / refillPerSec) + 10);
+
+    next();
+  };
+}
 
 
 // For local HTTP dev, Secure cookies won't set.
@@ -80,6 +123,34 @@ function requireSameOrigin(req, res, next) {
   return next();
 }
 
+const GUEST_COOKIE_NAME = "sg_guest";
+const GUEST_EXPIRES_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
+
+function guestCookieOptions(req) {
+  // same pattern as session cookies
+  const secure = isHttps(req) && process.env.NODE_ENV !== "development";
+  return {
+    httpOnly: true,
+    secure,
+    sameSite: "lax",
+    path: "/",
+    maxAge: GUEST_EXPIRES_MS,
+  };
+}
+
+function ensureGuestId(req, res, next) {
+  if (!req.cookies?.[GUEST_COOKIE_NAME]) {
+    const id = crypto.randomBytes(16).toString("hex");
+    res.cookie(GUEST_COOKIE_NAME, id, guestCookieOptions(req));
+    // make it visible immediately to later middleware in this request
+    req.cookies[GUEST_COOKIE_NAME] = id;
+  }
+  next();
+}
+
+app.use(ensureGuestId);
+
+
 async function authFromSessionCookie(req, res, next) {
   const cookie = req.cookies[SESSION_COOKIE_NAME];
   if (!cookie) {
@@ -102,6 +173,12 @@ async function authFromSessionCookie(req, res, next) {
 }
 
 app.use(authFromSessionCookie);
+
+function rateLimitId(req) {
+  if (req.user?.uid) return `u:${req.user.uid}`;
+  if (req.cookies?.sg_guest) return `g:${req.cookies.sg_guest}`;
+  return `ip:${req.ip}`;
+}
 
 
 // Client sends Firebase ID token after email/password sign-in.
@@ -655,7 +732,11 @@ app.get("/api/health", async (req, res) => {
 });
 
 
-app.get("/api/games", async (req, res) => {
+app.get("/api/games", rateLimit({
+    capacity: 60,
+    refillPerSec: 5, // burst ok
+    keyFn: rateLimitId
+  }), async (req, res) => {
   const ids = await rdb.zRange(K.updated, 0, 200, { REV: true });
   const out = [];
 
@@ -694,7 +775,11 @@ app.delete("/api/game/:gameId", async (req, res) => {
 });
 
 // create new game (now accepts { N, name })
-app.post("/api/game/new", async (req, res) => {
+app.post("/api/game/new", rateLimit({
+    capacity: 3,
+    refillPerSec: 1 / 60, // 1 per minute
+    keyFn: rateLimitId
+  }), async (req, res) => {
   const Nraw = req.body?.N ?? 19;
   const name = req.body?.name ?? "";
 
@@ -716,7 +801,11 @@ app.get("/api/game/:gameId", async (req, res) => {
 });
 
 // single action endpoint
-app.post("/api/move", async (req, res) => {
+app.post("/api/move", rateLimit({
+    capacity: 30,
+    refillPerSec: 1, // 1/sec sustained
+    keyFn: rateLimitId
+  }), async (req, res) => {
   const { gameId, action, rev, clientActionId } = req.body || {};
   if (!gameId || !action || !action.type) {
     return res.status(400).json({ ok: false, error: "Missing gameId/action" });
