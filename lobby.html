@@ -1,0 +1,308 @@
+<!-- lobby.html -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SpaceGo — Lobby</title>
+  <style>
+    html, body { height:100%; margin:0; background:#0b0d10; color:#e9eef5; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    .wrap { min-height:100%; display:flex; align-items:center; justify-content:center; padding:24px; box-sizing:border-box; }
+    .card { width: min(920px, 100%); border:1px solid #202733; background:#0f1318; border-radius:16px; padding:16px; box-sizing:border-box; }
+    h1 { font-size:18px; margin:0 0 8px; font-weight:650; }
+    .muted { opacity:0.8; font-size:12px; }
+    input, button {
+      background:#0b0d10; color:#e9eef5;
+      border:1px solid #2a3443; border-radius:10px;
+      padding:10px 12px; font-size:14px;
+    }
+    button { background:#1a2230; cursor:pointer; }
+    button:hover { background:#222c3d; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin:10px 0; }
+    .spacer { flex:1; }
+    .status { font-size:12px; opacity:0.85; }
+    .danger { color:#ffb4b4; }
+    .ok { color:#b9ffcc; }
+
+    .list {
+      margin-top: 12px;
+      border: 1px solid #202733;
+      border-radius: 14px;
+      overflow: hidden;
+      background: #0b0d10;
+    }
+    .listHeader {
+      display:flex;
+      gap:10px;
+      padding:10px 12px;
+      border-bottom: 1px solid #202733;
+      font-size: 12px;
+      opacity: 0.85;
+      user-select:none;
+    }
+    .listHeader > div { flex: 1; }
+    .listHeader .colId { flex: 0 0 88px; }
+    .listHeader .colN { flex: 0 0 56px; }
+    .listHeader .colMoves { flex: 0 0 84px; }
+    .listHeader .colPhase { flex: 0 0 82px; }
+    .listHeader .colWhen { flex: 0 0 140px; text-align:right; }
+
+    .gameRow {
+      display:flex;
+      gap:10px;
+      padding:12px;
+      border-bottom: 1px solid #141a22;
+      cursor: pointer;
+    }
+    .gameRow:last-child { border-bottom:none; }
+    .gameRow:hover { background:#0f1318; }
+    .gameRow > div { flex: 1; }
+    .gameRow .colId { flex: 0 0 88px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; opacity: 0.9; }
+    .gameRow .colN { flex: 0 0 56px; opacity: 0.9; }
+    .gameRow .colMoves { flex: 0 0 84px; opacity: 0.9; }
+    .gameRow .colPhase { flex: 0 0 82px; opacity: 0.9; text-transform: lowercase; }
+    .gameRow .colWhen { flex: 0 0 140px; text-align:right; opacity: 0.75; font-size: 12px; }
+    .nameCell { font-weight: 650; }
+    .subCell { font-size: 12px; opacity: 0.75; margin-top: 2px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+	
+	
+	
+	
+	<div style="border:1px solid #333; padding:10px; margin:10px 0;">
+  <div>
+    <input id="authEmail" type="email" placeholder="email" />
+    <input id="authPass" type="password" placeholder="password" />
+  </div>
+  <div style="margin-top:8px;">
+    <button id="authLogin">Login</button>
+    <button id="authSignup">Sign up</button>
+    <button id="authLogout">Logout</button>
+    <span id="authStatus" style="margin-left:10px;"></span>
+  </div>
+</div>
+
+<script type="module">
+  import { wireAuthUI } from "./auth_client.js";
+
+  wireAuthUI({
+    emailEl: document.getElementById("authEmail"),
+    passEl: document.getElementById("authPass"),
+    statusEl: document.getElementById("authStatus"),
+    btnLogin: document.getElementById("authLogin"),
+    btnSignup: document.getElementById("authSignup"),
+    btnLogout: document.getElementById("authLogout"),
+  });
+</script>
+
+
+
+
+      <h1>Lobby</h1>
+      <div class="muted">Create a game (named), or click an existing game to open it.</div>
+
+      <div class="row" style="margin-top:14px;">
+        <button id="refresh">Refresh</button>
+        <div class="spacer"></div>
+        <div class="status" id="status"></div>
+      </div>
+
+      <div class="list" id="list">
+        <div class="listHeader">
+          <div class="colId">id</div>
+          <div>name</div>
+          <div class="colN">N</div>
+          <div class="colMoves">moves</div>
+          <div class="colPhase">phase</div>
+          <div class="colWhen">updated</div>
+        </div>
+        <div id="gameList"></div>
+      </div>
+
+      <div class="row" style="margin-top:14px;">
+        <div class="muted">Create new:</div>
+        <input id="name" type="text" placeholder="game name" style="width: 260px" />
+        <input id="size" type="number" min="5" max="49" value="19" style="width: 120px" />
+        <button id="create">Create</button>
+      </div>
+
+      <div class="row">
+        <div class="muted">Open by id:</div>
+        <input id="joinId" type="text" placeholder="gameId" style="width:220px" />
+        <button id="join">Open</button>
+      </div>
+
+      <div class="muted">Opens the game page at <code>/game.html?gameId=...</code>.</div>
+    </div>
+  </div>
+
+<script>
+  const elList = document.getElementById('gameList');
+  const elStatus = document.getElementById('status');
+
+  function setStatus(msg, kind) {
+    elStatus.textContent = msg || '';
+    elStatus.className = 'status ' + (kind || '');
+  }
+
+  function clampInt(v, lo, hi, fallback) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return fallback;
+    const t = Math.trunc(n);
+    return Math.max(lo, Math.min(hi, t));
+  }
+
+  function ago(ms) {
+    if (!ms) return '';
+    const d = Date.now() - ms;
+    const s = Math.max(0, Math.floor(d / 1000));
+    if (s < 10) return 'just now';
+    if (s < 60) return s + 's ago';
+    const m = Math.floor(s / 60);
+    if (m < 60) return m + 'm ago';
+    const h = Math.floor(m / 60);
+    if (h < 48) return h + 'h ago';
+    const days = Math.floor(h / 24);
+    return days + 'd ago';
+  }
+
+  async function apiGet(path) {
+    const r = await fetch(path, { method:'GET' });
+    let data = null;
+    try { data = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error((data && (data.error || data.reason)) || ('HTTP ' + r.status));
+    return data;
+  }
+
+  async function apiPost(path, body) {
+    const r = await fetch(path, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify(body || {})
+    });
+    let data = null;
+    try { data = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error((data && (data.error || data.reason)) || ('HTTP ' + r.status));
+    return data;
+  }
+
+  function goGame(gameId) {
+    if (!gameId) return;
+    window.location.href = `/game.html?gameId=${encodeURIComponent(gameId)}`;
+  }
+
+  function clearList() {
+    while (elList.firstChild) elList.removeChild(elList.firstChild);
+  }
+
+  function addRow(g) {
+    const row = document.createElement('div');
+    row.className = 'gameRow';
+    row.addEventListener('click', () => goGame(g.gameId));
+
+    const shortId = (g.gameId || '').slice(0, 8);
+
+    const cId = document.createElement('div');
+    cId.className = 'colId';
+    cId.textContent = shortId;
+
+    const cName = document.createElement('div');
+    const nameTop = document.createElement('div');
+    nameTop.className = 'nameCell';
+    nameTop.textContent = (g.name || '(unnamed)');
+    const nameSub = document.createElement('div');
+    nameSub.className = 'subCell';
+    nameSub.textContent = `rev ${g.rev ?? 0} • ${g.gameId || ''}`;
+    cName.appendChild(nameTop);
+    cName.appendChild(nameSub);
+
+    const cN = document.createElement('div');
+    cN.className = 'colN';
+    cN.textContent = 'N' + (g.N ?? '');
+
+    const cMoves = document.createElement('div');
+    cMoves.className = 'colMoves';
+    cMoves.textContent = String(g.moveCount ?? 0);
+
+    const cPhase = document.createElement('div');
+    cPhase.className = 'colPhase';
+    cPhase.textContent = (g.phase || 'play');
+
+    const cWhen = document.createElement('div');
+    cWhen.className = 'colWhen';
+    cWhen.textContent = ago(g.updatedAt);
+
+    row.appendChild(cId);
+    row.appendChild(cName);
+    row.appendChild(cN);
+    row.appendChild(cMoves);
+    row.appendChild(cPhase);
+    row.appendChild(cWhen);
+
+    elList.appendChild(row);
+  }
+
+  function fillList(games) {
+    clearList();
+    if (!games.length) {
+      const empty = document.createElement('div');
+      empty.style.padding = '12px';
+      empty.style.opacity = '0.75';
+      empty.textContent = 'No games yet';
+      elList.appendChild(empty);
+      return;
+    }
+    for (const g of games) addRow(g);
+  }
+
+  async function refresh() {
+    setStatus('Loading…');
+    try {
+      const out = await apiGet('/api/games');
+      const games = (out && out.games) ? out.games : [];
+      fillList(games);
+      setStatus(games.length ? `Loaded ${games.length} games` : 'No games yet', games.length ? 'ok' : '');
+    } catch (e) {
+      setStatus(e.message || 'Failed', 'danger');
+    }
+  }
+
+  document.getElementById('refresh').addEventListener('click', refresh);
+
+  document.getElementById('create').addEventListener('click', async () => {
+    const N = clampInt(document.getElementById('size').value, 5, 49, 19);
+    const name = (document.getElementById('name').value || '').trim();
+
+    setStatus('Creating…');
+    try {
+      const out = await apiPost('/api/game/new', { N, name });
+      if (!out || !out.gameId) throw new Error('Bad response');
+      setStatus('Created', 'ok');
+      goGame(out.gameId);
+    } catch (e) {
+      setStatus(e.message || 'Failed', 'danger');
+    }
+  });
+
+  document.getElementById('join').addEventListener('click', async () => {
+    const id = (document.getElementById('joinId').value || '').trim();
+    if (!id) return;
+
+    setStatus('Checking…');
+    try {
+      await apiGet(`/api/game/${encodeURIComponent(id)}`);
+      setStatus('Opening', 'ok');
+      goGame(id);
+    } catch (e) {
+      setStatus(e.message || 'Not found', 'danger');
+    }
+  });
+
+  refresh();
+</script>
+</body>
+</html>

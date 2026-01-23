@@ -1,9 +1,8 @@
-// events.js
+// events.js (only kept pass; removed reset/new-game UI + game dropdown wiring)
 window.Events = window.Events || {};
 
 Events.onPointerDown = function (e) {
   if (e.button !== 0) return; // left only
-
   const rect = canvas.getBoundingClientRect();
   const sx = e.clientX - rect.left;
   const sy = e.clientY - rect.top;
@@ -22,7 +21,6 @@ Events.onPointerMove = function (e) {
   const sx = e.clientX - rect.left;
   const sy = e.clientY - rect.top;
 
-  // Hover updates even without left down
   mouse.x = sx;
   mouse.y = sy;
 
@@ -50,7 +48,6 @@ Events.onPointerMove = function (e) {
   const dx = (sx - dragStart.x) / cell;
   const dy = (sy - dragStart.y) / cell;
 
-  // Dragging the mouse right should move camera left (world follows hand)
   camAX = camStart.ax - dx;
   camAY = camStart.ay - dy;
 
@@ -75,37 +72,65 @@ Events.onPointerUp = function (e) {
 
   if (!wasDrag) {
     const absf = Util.screenToAbs(sx, sy);
-const near = Util.absFloatToNearest(absf.ax, absf.ay);
+    const near = Util.absFloatToNearest(absf.ax, absf.ay);
 
-if (Engine.getPhase && Engine.getPhase() === 'scoring') {
-  const r = Engine.toggleDeadAtAbs(near.ax, near.ay);
+    if (Engine.getPhase && Engine.getPhase() === 'scoring') {
+      const r = Engine.toggleDeadAtAbs(near.ax, near.ay);
+      if (!r.ok) {
+        if (r.reason !== 'Empty') Util.setStatus(r.reason);
+      }
+      Render.requestRender();
+      return;
+    }
 
-  // Clicking empty space during scoring is a no-op; keep the scoring status text.
-  if (!r.ok) {
-    if (r.reason !== 'Empty') Util.setStatus(r.reason);
-    // else do nothing
+    // Turn gate (insecure on purpose for now): only the selected side can move on its turn.
+    if (!Util.canActNow()) {
+      Util.setStatus(Util.getPlayer() === 0 ? 'Select Black or White' : 'Not your turn');
+      Render.requestRender();
+      return;
+    }
+
+    const r0 = (() => {
+      const s0 = { N, board, toMove, seen: Util.seen, phase: Engine.getPhase(), passStreak: 0 };
+      const { bx, by } = near;
+      return Engine.simulatePlayBase(bx, by, s0);
+    })();
+
+    if (!r0.ok) {
+      Util.setStatus(r0.reason);
+      Render.requestRender();
+      return;
+    }
+
+    if (!Engine.isNetMode || !Engine.isNetMode()) {
+      Engine.applyStateLocal(r0.next);
+      Util.setTurnUI();
+      Util.setStatus(r0.captured ? `Captured ${r0.captured}` : 'Placed');
+      Render.requestRender();
+      return;
+    }
+
+    if (Engine.isNetBusy && Engine.isNetBusy()) return;
+
+    Engine._setNetBusy(true);
+    Util.setStatus('Sending…');
+    Render.requestRender();
+
+    Net.requestAction({
+      type: 'play',
+      ax: near.ax,
+      ay: near.ay,
+      bx: near.bx,
+      by: near.by,
+    }).then((rr) => {
+      if (!rr.ok) Util.setStatus(rr.reason);
+      else Util.setStatus('Placed');
+      Util.setTurnUI();
+      Render.requestRender();
+    }).finally(() => {
+      Engine._setNetBusy(false);
+    });
   }
-
-  Render.requestRender();
-  return;
-}
-
-// normal play path (unchanged)
-const r = Engine.tryPlayAbs(near.ax, near.ay);
-if (!r.ok) {
-  Util.setStatus(r.reason);
-} else {
-  Util.setTurnUI();
-  Util.setStatus(r.captured ? `Captured ${r.captured}` : 'Placed');
-}
-Render.requestRender();
-  } else {
-    Util._syncGlobals();
-  }
-
-  try {
-    canvas.releasePointerCapture(e.pointerId);
-  } catch (_) {}
 };
 
 Events.onPointerLeave = function () {
@@ -125,7 +150,6 @@ Events.onWheel = function (e) {
   Render.requestRender();
 };
 
-// Optional: handle pointercancel cleanly (mobile / OS interruptions)
 Events.onPointerCancel = function () {
   dragging = false;
   dragMode = 'idle';
@@ -136,11 +160,27 @@ Events.onPointerCancel = function () {
 };
 
 // Bindings
-passBtn.addEventListener('click', () => Engine.pass());
-resetBtn.addEventListener('click', () => Engine.reset(N));
-applySizeBtn.addEventListener('click', () => {
-  const n = Util.clampInt(parseInt(sizeInput.value || '19', 10), 5, 49);
-  Engine.reset(n);
+passBtn.addEventListener('click', async () => {
+  if (!Util.canActNow()) {
+    Util.setStatus(Util.getPlayer() === 0 ? 'Select Black or White' : 'Not your turn');
+    Render.requestRender();
+    return;
+  }
+  if (Engine.isNetMode && Engine.isNetMode()) {
+    if (Engine.isNetBusy && Engine.isNetBusy()) return;
+    Engine._setNetBusy(true);
+    Util.setStatus('Sending…');
+    Render.requestRender();
+    try {
+      const r = await Net.requestAction({ type: 'pass' });
+      if (!r.ok) Util.setStatus(r.reason);
+    } finally {
+      Engine._setNetBusy(false);
+      Render.requestRender();
+    }
+  } else {
+    Engine.pass();
+  }
 });
 
 canvas.addEventListener('pointerdown', Events.onPointerDown);
@@ -150,10 +190,8 @@ canvas.addEventListener('pointerleave', Events.onPointerLeave);
 canvas.addEventListener('pointercancel', Events.onPointerCancel);
 canvas.addEventListener('wheel', Events.onWheel, { passive: false });
 
-// Disable default context menu on right click
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
-// Resize
 const shell = document.getElementById('game-shell');
 const ro = new ResizeObserver((entries) => {
   for (const entry of entries) {

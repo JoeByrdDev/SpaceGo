@@ -5,11 +5,12 @@ const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 
 const turnPill = document.getElementById('turnPill');
+const youPill = document.getElementById('youPill');
 const statusPill = document.getElementById('statusPill');
 const passBtn = document.getElementById('passBtn');
-const resetBtn = document.getElementById('resetBtn');
-const sizeInput = document.getElementById('sizeInput');
-const applySizeBtn = document.getElementById('applySizeBtn');
+const gamesBtn = document.getElementById('gamesBtn');
+const p1Btn = document.getElementById('p1Btn');
+const p2Btn = document.getElementById('p2Btn');
 
 const margin = 10; // extra grid drawn around viewport
 
@@ -44,11 +45,72 @@ Util.other = function (p) {
   return p === 1 ? 2 : 1;
 };
 
-// --- Absolute grid coordinate API ---
-// Absolute integer intersection: (ax, ay) on infinite plane.
-// Base board lookup: (bx, by) = wrap(ax), wrap(ay) in [0..N-1].
-// Tile index: (tx, ty) = floorDiv(ax, N), floorDiv(ay, N).
+// Lobby navigation
+if (gamesBtn) {
+  gamesBtn.addEventListener('click', () => {
+    window.location.href = '/';
+  });
+}
 
+// --- Player selection (cookie) ---
+// player: 0 = observer, 1 = black, 2 = white
+let player = 0;
+let playerCookieKey = 'sg_player';
+
+Util._cookieGet = function (name) {
+  const needle = name + '=';
+  const parts = (document.cookie || '').split(';');
+  for (let p of parts) {
+    p = p.trim();
+    if (p.startsWith(needle)) return decodeURIComponent(p.slice(needle.length));
+  }
+  return null;
+};
+
+Util._cookieSet = function (name, value, days = 3650) {
+  const maxAge = Math.max(0, Math.trunc(days * 86400));
+  document.cookie = `${name}=${encodeURIComponent(String(value))}; Path=/; Max-Age=${maxAge}; SameSite=Lax`;
+};
+
+Util._cookieDel = function (name) {
+  document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=Lax`;
+};
+
+Util._playerLabel = function (p) {
+  if (p === 1) return 'Black';
+  if (p === 2) return 'White';
+  return 'Observer';
+};
+
+Util.setPlayerCookieKey = function (key) {
+  playerCookieKey = key || 'sg_player';
+  const raw = Util._cookieGet(playerCookieKey);
+  const n = raw == null ? 0 : Number(raw);
+  player = (n === 1 || n === 2) ? n : 0;
+  Util._syncGlobals();
+  Util.setPlayerUI();
+};
+
+Util.getPlayer = function () {
+  return player;
+};
+
+Util.setPlayer = function (p) {
+  const v = (p === 1 || p === 2) ? p : 0;
+  player = v;
+  if (v === 0) Util._cookieDel(playerCookieKey);
+  else Util._cookieSet(playerCookieKey, v);
+  Util._syncGlobals();
+  Util.setPlayerUI();
+  if (window.Render && Render.requestRender) Render.requestRender();
+};
+
+Util.canActNow = function () {
+  // Observer can never place/pass.
+  return player !== 0 && player === toMove;
+};
+
+// --- Absolute grid coordinate API ---
 Util.absToBase = function (ax, ay) {
   const bx = Util.wrap(ax);
   const by = Util.wrap(ay);
@@ -67,8 +129,8 @@ Util.baseToAbs = function (bx, by, tx = 0, ty = 0) {
 let viewW = 0;
 let viewH = 0;
 
-// Board size
-let N = Util.clampInt(parseInt(sizeInput.value || '19', 10), 5, 49);
+// Board size (authoritative value comes from server in net mode)
+let N = 19;
 
 // Zoom
 let cell = 34; // pixels per grid unit (intersection spacing)
@@ -90,7 +152,7 @@ let mouse = { x: 0, y: 0, over: null };
 // Render scheduling
 let rafPending = false;
 
-// Expose a few globals used by other files (classic script pattern)
+// Expose globals
 window.canvas = canvas;
 window.ctx = ctx;
 
@@ -105,6 +167,7 @@ window.camAX = camAX;
 window.camAY = camAY;
 
 window.toMove = toMove;
+window.player = player;
 
 window.dragging = dragging;
 window.dragStart = dragStart;
@@ -114,7 +177,6 @@ window.mouse = mouse;
 
 window.rafPending = rafPending;
 
-// Keep exported globals in sync when we mutate local bindings
 Util._syncGlobals = function () {
   window.viewW = viewW;
   window.viewH = viewH;
@@ -125,6 +187,7 @@ Util._syncGlobals = function () {
   window.camAY = camAY;
 
   window.toMove = toMove;
+  window.player = player;
 
   window.dragging = dragging;
   window.dragStart = dragStart;
@@ -154,9 +217,23 @@ Util.setStatus = function (text) {
 
 Util.setTurnUI = function () {
   turnPill.textContent = `Turn: ${toMove === 1 ? 'Black' : 'White'}`;
+  Util.setPlayerUI();
 };
 
-// Hash board + toMove into a stable string
+Util.setPlayerUI = function () {
+  if (!youPill) return;
+  const label = Util._playerLabel(player);
+  const suffix = (player !== 0 && player === toMove) ? ' (your turn)' : '';
+  youPill.textContent = `You: ${label}${suffix}`;
+
+  if (p1Btn) p1Btn.disabled = player === 1;
+  if (p2Btn) p2Btn.disabled = player === 2;
+};
+
+// Player picker bindings
+if (p1Btn) p1Btn.addEventListener('click', () => Util.setPlayer(1));
+if (p2Btn) p2Btn.addEventListener('click', () => Util.setPlayer(2));
+
 Util.hashPosition = function (nextPlayer = toMove) {
   let s = '' + nextPlayer + '|';
   for (let y = 0; y < N; y++) s += board[y].join('') + ';';
@@ -186,7 +263,6 @@ Util.absFloatToNearest = function (axf, ayf) {
   return Util.absToBase(ax, ay);
 };
 
-// Mutators that affect exported globals
 Util.setBoardSize = function (n) {
   N = n;
   Util._syncGlobals();
@@ -208,13 +284,30 @@ Util.setToMove = function (p) {
   Util._syncGlobals();
 };
 
+Util.newActionId = function () {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    return window.crypto.randomUUID();
+  }
+  const buf = new Uint8Array(16);
+  if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+    window.crypto.getRandomValues(buf);
+  } else {
+    for (let i = 0; i < buf.length; i++) buf[i] = (Math.random() * 256) | 0;
+  }
+  let hex = '';
+  for (let i = 0; i < buf.length; i++) hex += buf[i].toString(16).padStart(2, '0');
+  return hex;
+};
+
 // Export UI elements for Events.js
 window.turnPill = turnPill;
+window.youPill = youPill;
 window.statusPill = statusPill;
 window.passBtn = passBtn;
-window.resetBtn = resetBtn;
-window.sizeInput = sizeInput;
-window.applySizeBtn = applySizeBtn;
+window.gamesBtn = gamesBtn;
+window.p1Btn = p1Btn;
+window.p2Btn = p2Btn;
 
 // Initial sync
 Util._syncGlobals();
+Util.setPlayerUI();
