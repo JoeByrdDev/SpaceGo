@@ -76,6 +76,15 @@ html, body {
   margin-left: auto;
 }
 
+.seat-taken {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.seat-you {
+  outline: 2px solid currentColor;
+}
+
 /* -------------------------------------------------- */
 /* Mobile / small screens */
 /* -------------------------------------------------- */

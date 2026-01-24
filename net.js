@@ -5,6 +5,17 @@ Net.baseUrl = ''; // same-origin by default. Set to 'http://localhost:3000' duri
 
 let inFlight = null;
 
+// seat availability from server
+let seatState = { blackTaken: false, whiteTaken: false };
+
+function setSeatStateFromServer(seats) {
+  seatState = {
+    blackTaken: !!seats?.blackTaken,
+    whiteTaken: !!seats?.whiteTaken,
+  };
+  if (window.Util && Util.setSeatButtonsUI) Util.setSeatButtonsUI();
+}
+
 Net._post = async function (path, body, { signal } = {}) {
   const res = await fetch(Net.baseUrl + path, {
     method: 'POST',
@@ -33,6 +44,10 @@ Net._get = async function (path, { signal } = {}) {
   }
   return { ok: true, data };
 };
+
+Net.claim = (side) => Net.requestAction({ type: "claim", side });
+Net.release = (side) => Net.requestAction({ type: "release", side });
+Net.getSeatState = () => seatState;
 
 Net.listGames = async function () {
   const r = await Net._get('/api/games');
@@ -63,6 +78,15 @@ Net.applyState = function (state) {
   if (state.seen) Util.seen = new Set(state.seen);
 
   if (Engine && Engine._setServerPhase) Engine._setServerPhase(state);
+
+  if (state.you && typeof state.you.side === 'number') {
+    Util.setPlayerServer(state.you.side); // updates Util’s internal player
+  }
+  
+  if (state.seats) setSeatStateFromServer(state.seats);
+  if (state.you && typeof state.you.side === "number" && window.Util?.setPlayerServer) {
+    Util.setPlayerServer(state.you.side);
+  }
 
   Util.setTurnUI();
   Render.requestRender();

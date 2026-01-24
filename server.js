@@ -5,7 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { createClient } from "redis";
 import http from "http";
-import { WebSocketServer } from "ws";
+import WebSocket, { WebSocketServer } from "ws";
 
 import cookieParser from "cookie-parser";
 import admin from "firebase-admin";
@@ -124,11 +124,10 @@ function requireSameOrigin(req, res, next) {
 }
 
 
-const GUEST_COOKIE_NAME = "sg_guest";
+const GUEST_COOKIE = "sg_guest";
 const GUEST_EXPIRES_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
 function guestCookieOptions(req) {
-  // same pattern as session cookies
   const secure = isHttps(req) && process.env.NODE_ENV !== "development";
   return {
     httpOnly: true,
@@ -139,17 +138,20 @@ function guestCookieOptions(req) {
   };
 }
 
-function ensureGuestId(req, res, next) {
-  if (!req.cookies?.[GUEST_COOKIE_NAME]) {
-    const id = crypto.randomBytes(16).toString("hex");
-    res.cookie(GUEST_COOKIE_NAME, id, guestCookieOptions(req));
-    // make it visible immediately to later middleware in this request
-    req.cookies[GUEST_COOKIE_NAME] = id;
+function ensureGuest(req, res, next) {
+  if (req.user?.uid) return next();
+
+  let g = req.cookies?.[GUEST_COOKIE];
+  if (!g) {
+    g = crypto.randomBytes(18).toString("base64url");
+    res.cookie(GUEST_COOKIE, g, guestCookieOptions(req));
   }
+  req.guestId = g;
   next();
 }
 
-app.use(ensureGuestId);
+app.use(ensureGuest);
+
 
 
 async function authFromSessionCookie(req, res, next) {
@@ -257,16 +259,29 @@ function subDel(gameId, ws) {
 }
 
 function wsSend(ws, obj) {
-  if (ws.readyState !== ws.OPEN) return;
+  if (ws.readyState !== WebSocket.OPEN) return;
   try { ws.send(JSON.stringify(obj)); } catch {}
 }
+
 
 function publishGame(g) {
   const set = wsSubs.get(g.id);
   if (!set || set.size === 0) return;
-  const state = gamePublicState(g);
-  const msg = { type: "state", state };
-  for (const ws of set) wsSend(ws, msg);
+  for (const ws of set) {
+    wsSend(ws, { type: "state", state: gamePublicState(g, ws._actor || null) });
+  }
+}
+
+function parseCookies(h) {
+  const out = {};
+  (h || "").split(";").forEach(part => {
+    const i = part.indexOf("=");
+    if (i === -1) return;
+    const k = part.slice(0, i).trim();
+    const v = decodeURIComponent(part.slice(i + 1).trim());
+    out[k] = v;
+  });
+  return out;
 }
 
 const wss = new WebSocketServer({ server, path: "/ws" });
@@ -284,9 +299,22 @@ wss.on("connection", async (ws, req) => {
 
   const gameId = g.id;
   subAdd(gameId, ws);
+  
+  const cookies = parseCookies(req.headers.cookie);
+let actor = null;
 
-  // immediately send authoritative state snapshot
-  wsSend(ws, { type: "state", state: gamePublicState(g) });
+const sess = cookies[SESSION_COOKIE_NAME];
+if (sess) {
+  try {
+    const decoded = await admin.auth().verifySessionCookie(sess, true);
+    actor = { kind: "uid", id: decoded.uid };
+  } catch {}
+}
+if (!actor && cookies[GUEST_COOKIE]) actor = { kind: "guest", id: cookies[GUEST_COOKIE] };
+
+ws._actor = actor;
+wsSend(ws, { type:"state", state: gamePublicState(g, actor) });
+  
 
   ws.on("close", () => subDel(gameId, ws));
   ws.on("error", () => subDel(gameId, ws));
@@ -515,6 +543,90 @@ function cleanName(name, fallback) {
   return s.slice(0, 60);
 }
 
+const SEAT_GUEST_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
+
+function actorFromReq(req) {
+  if (req.user?.uid) return { kind: "uid", id: req.user.uid };
+  if (req.guestId) return { kind: "guest", id: req.guestId };
+  return null;
+}
+
+function pruneExpiredSeats(g) {
+  const now = nowMs();
+  for (const k of ["black", "white"]) {
+    const s = g.seats?.[k];
+    if (!s) continue;
+    if (s.kind === "guest" && s.expiresAt && s.expiresAt <= now) g.seats[k] = null;
+  }
+}
+
+function seatKeyForSide(side) {
+  return side === 1 ? "black" : side === 2 ? "white" : null;
+}
+
+function sameOwner(a, b) {
+  return a && b && a.kind === b.kind && a.id === b.id;
+}
+
+function viewerSide(g, actor) {
+  if (!actor) return 0;
+  if (g.seats?.black && sameOwner(g.seats.black, actor)) return 1;
+  if (g.seats?.white && sameOwner(g.seats.white, actor)) return 2;
+  return 0;
+}
+
+function claimSeat(g, side, actor) {
+  pruneExpiredSeats(g);
+  const key = seatKeyForSide(side);
+  if (!key) return { ok: false, reason: "Bad side" };
+
+  const otherKey = key === "black" ? "white" : "black";
+
+  const cur = g.seats[key];
+  if (cur && !sameOwner(cur, actor)) return { ok: false, reason: "Seat taken" };
+
+  // EXCLUSIVE: if you own the other seat, drop it when switching
+  const other = g.seats[otherKey];
+  if (other && sameOwner(other, actor)) {
+    g.seats[otherKey] = null;
+  }
+
+  const seat = { kind: actor.kind, id: actor.id, claimedAt: nowMs() };
+  if (actor.kind === "guest") seat.expiresAt = nowMs() + SEAT_GUEST_TTL_MS;
+
+  g.seats[key] = seat;
+  g.updatedAt = nowMs();
+  return { ok: true };
+}
+
+
+function releaseSeat(g, side, actor) {
+  pruneExpiredSeats(g);
+  const key = seatKeyForSide(side);
+  if (!key) return { ok: false, reason: "Bad side" };
+
+  const cur = g.seats[key];
+  if (!cur) return { ok: true }; // already empty
+  if (!sameOwner(cur, actor)) return { ok: false, reason: "Not owner" };
+
+  g.seats[key] = null;
+  g.updatedAt = nowMs();
+  return { ok: true };
+}
+
+function requireTurnOwner(g, actor) {
+  pruneExpiredSeats(g);
+  const key = seatKeyForSide(g.toMove);
+  const cur = key ? g.seats?.[key] : null;
+  if (!cur) return { ok: false, reason: "Unclaimed side" };
+  if (!sameOwner(cur, actor)) return { ok: false, reason: "Not your turn" };
+
+  // refresh guest TTL on activity
+  if (cur.kind === "guest") cur.expiresAt = nowMs() + SEAT_GUEST_TTL_MS;
+  return { ok: true };
+}
+
+
 function createGame(N = 19, name = "") {
   const id = newGameId();
   const shortId = id.slice(0, 8);
@@ -530,11 +642,15 @@ function createGame(N = 19, name = "") {
     phase: "play",
     passStreak: 0,
 
-    deadSet: [],        // array of "x,y"
+    deadSet: [],
     scoreResult: null,
     rev: 0,
+    seen: [],
 
-    seen: [],           // array of position hashes
+    seats: {
+      black: null, // { kind:'uid'|'guest', id:'...', claimedAt, expiresAt? }
+      white: null,
+    },
 
     createdAt: nowMs(),
     updatedAt: nowMs(),
@@ -544,7 +660,9 @@ function createGame(N = 19, name = "") {
   return g;
 }
 
-function gamePublicState(g) {
+
+function gamePublicState(g, actor = null) {
+  pruneExpiredSeats(g);
   return {
     gameId: g.id,
     name: g.name,
@@ -560,8 +678,18 @@ function gamePublicState(g) {
     posHash: hashPosition(g),
     createdAt: g.createdAt,
     updatedAt: g.updatedAt,
+
+    // new:
+    seats: {
+      blackTaken: !!(g.seats && g.seats.black),
+      whiteTaken: !!(g.seats && g.seats.white),
+    },
+    you: {
+      side: viewerSide(g, actor), // 0/1/2
+    },
   };
 }
+
 
 
 /* -----------------------------
@@ -828,6 +956,12 @@ app.post("/api/move", rateLimit({
     return res.status(400).json({ ok: false, error: "Missing gameId/action" });
   }
 
+  // identity (firebase uid or guest cookie)
+  const actor = actorFromReq(req);
+  if (!actor) {
+    return res.status(401).json({ ok: false, error: "No identity" });
+  }
+
   // idempotency
   const cached = await getCachedAction(gameId, clientActionId);
   if (cached) return res.json(cached);
@@ -850,27 +984,52 @@ app.post("/api/move", rateLimit({
 
   if (!Number.isInteger(rev) || rev !== g.rev) {
     await rdb.unwatch();
-    return res.status(409).json({ ok: false, error: "Out of date", state: gamePublicState(g) });
+    return res.status(409).json({ ok: false, error: "Out of date", state: gamePublicState(g, actor) });
   }
 
   let r;
   const t = action.type;
 
-  if (t === "play") {
+  if (t === "claim") {
+    const side = Number(action.side);
+    if (side !== 1 && side !== 2) {
+      await rdb.unwatch();
+      return res.status(400).json({ ok: false, error: "Bad side" });
+    }
+    r = claimSeat(g, side, actor);
+
+  } else if (t === "release") {
+    const side = Number(action.side);
+    if (side !== 1 && side !== 2) {
+      await rdb.unwatch();
+      return res.status(400).json({ ok: false, error: "Bad side" });
+    }
+    r = releaseSeat(g, side, actor);
+
+  } else if (t === "play") {
     const ax = Number.isFinite(action.ax) ? action.ax : action.bx;
     const ay = Number.isFinite(action.ay) ? action.ay : action.by;
     if (!Number.isFinite(ax) || !Number.isFinite(ay)) {
       await rdb.unwatch();
       return res.status(400).json({ ok: false, error: "Missing coordinates" });
     }
-    r = tryPlay(g, ax, ay);
+
+    const gate = requireTurnOwner(g, actor);
+    if (!gate.ok) r = gate;
+    else r = tryPlay(g, ax, ay);
+
   } else if (t === "pass") {
-    r = doPass(g);
+    const gate = requireTurnOwner(g, actor);
+    if (!gate.ok) r = gate;
+    else r = doPass(g);
+
   } else if (t === "reset") {
     const N = action.N ?? g.N;
     r = doReset(g, Number(N));
+
   } else if (t === "setPhase") {
     r = doSetPhase(g, action.phase);
+
   } else if (t === "toggleDead") {
     const ax = action.ax, ay = action.ay;
     if (!Number.isFinite(ax) || !Number.isFinite(ay)) {
@@ -878,13 +1037,20 @@ app.post("/api/move", rateLimit({
       return res.status(400).json({ ok: false, error: "Missing coordinates" });
     }
     r = doToggleDead(g, ax, ay);
+
   } else if (t === "finalizeScore") {
     r = doFinalizeScoring(g);
+
   } else if (t === "resign") {
     g.phase = "scoring";
-    g.scoreResult = { note: `${action.player || "A player"} resigned` };
+    const who =
+      actor.kind === "uid" ? `uid:${actor.id}` :
+      actor.kind === "guest" ? "guest" :
+      "player";
+    g.scoreResult = { note: `${who} resigned` };
     g.updatedAt = nowMs();
     r = { ok: true };
+
   } else {
     await rdb.unwatch();
     return res.status(400).json({ ok: false, error: "Unknown action type" });
@@ -894,13 +1060,25 @@ app.post("/api/move", rateLimit({
 
   let payload;
   if (!r.ok) {
-    payload = { ok: true, accepted: false, reason: r.reason || "Rejected", state: gamePublicState(g) };
+    payload = {
+      ok: true,
+      accepted: false,
+      reason: r.reason || "Rejected",
+      state: gamePublicState(g, actor),
+    };
   } else {
     if (countsAsMove) g.moveCount += 1;
+
+    // any accepted action that mutates state bumps rev
     g.rev += 1;
     g.updatedAt = nowMs();
 
-    payload = { ok: true, accepted: true, meta: { captured: r.captured || 0 }, state: gamePublicState(g) };
+    payload = {
+      ok: true,
+      accepted: true,
+      meta: { captured: r.captured || 0 },
+      state: gamePublicState(g, actor),
+    };
   }
 
   // transaction commit
@@ -911,9 +1089,12 @@ app.post("/api/move", rateLimit({
 
   const execRes = await multi.exec(); // null => watched key changed
   if (execRes === null) {
-    // someone else wrote first; return authoritative
     const fresh = await rgetJson(key);
-    return res.status(409).json({ ok: false, error: "Out of date", state: gamePublicState(fresh || g) });
+    return res.status(409).json({
+      ok: false,
+      error: "Out of date",
+      state: gamePublicState(fresh || g, actor),
+    });
   }
 
   publishGame(g);

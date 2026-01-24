@@ -82,6 +82,7 @@ Util._playerLabel = function (p) {
   return 'Observer';
 };
 
+/*
 Util.setPlayerCookieKey = function (key) {
   playerCookieKey = key || 'sg_player';
   const raw = Util._cookieGet(playerCookieKey);
@@ -90,6 +91,7 @@ Util.setPlayerCookieKey = function (key) {
   Util._syncGlobals();
   Util.setPlayerUI();
 };
+*/
 
 Util.getPlayer = function () {
   return player;
@@ -103,6 +105,14 @@ Util.setPlayer = function (p) {
   Util._syncGlobals();
   Util.setPlayerUI();
   if (window.Render && Render.requestRender) Render.requestRender();
+};
+
+// add near Util.setPlayer (right after it is fine)
+Util.setPlayerServer = function (p) {
+  const v = (p === 1 || p === 2) ? p : 0;
+  player = v;
+  Util._syncGlobals();
+  Util.setPlayerUI(); // also refresh seat buttons
 };
 
 Util.canActNow = function () {
@@ -220,19 +230,67 @@ Util.setTurnUI = function () {
   Util.setPlayerUI();
 };
 
+Util.setSeatButtonsUI = function () {
+  const p1Btn = document.getElementById("p1Btn"); // Black button
+  const p2Btn = document.getElementById("p2Btn"); // White button
+  if (!p1Btn || !p2Btn) return;
+
+  const netMode = window.Engine?.isNetMode && Engine.isNetMode();
+  if (!netMode) return;
+
+  const seats = window.Net?.getSeatState ? Net.getSeatState() : { blackTaken:false, whiteTaken:false };
+
+  // compute ownership
+  const youBlack = (player === 1);
+  const youWhite = (player === 2);
+
+  // availability (taken by someone else)
+  const blackTakenOther = seats.blackTaken && !youBlack;
+  const whiteTakenOther = seats.whiteTaken && !youWhite;
+
+  // text
+  p1Btn.textContent = youBlack ? "Black (You)" : (blackTakenOther ? "Black (Taken)" : "Play as Black");
+  p2Btn.textContent = youWhite ? "White (You)" : (whiteTakenOther ? "White (Taken)" : "Play as White");
+
+  // disable if taken by other
+  p1Btn.disabled = blackTakenOther;
+  p2Btn.disabled = whiteTakenOther;
+
+  // classes for styling
+  p1Btn.classList.toggle("seat-taken", blackTakenOther);
+  p2Btn.classList.toggle("seat-taken", whiteTakenOther);
+  p1Btn.classList.toggle("seat-you", youBlack);
+  p2Btn.classList.toggle("seat-you", youWhite);
+};
+
 Util.setPlayerUI = function () {
   if (!youPill) return;
   const label = Util._playerLabel(player);
   const suffix = (player !== 0 && player === toMove) ? ' (your turn)' : '';
   youPill.textContent = `You: ${label}${suffix}`;
-
+  if (Util.setSeatButtonsUI) Util.setSeatButtonsUI();
   if (p1Btn) p1Btn.disabled = player === 1;
   if (p2Btn) p2Btn.disabled = player === 2;
 };
 
 // Player picker bindings
-if (p1Btn) p1Btn.addEventListener('click', () => Util.setPlayer(1));
-if (p2Btn) p2Btn.addEventListener('click', () => Util.setPlayer(2));
+if (p1Btn) p1Btn.addEventListener("click", async () => {
+  if (window.Engine?.isNetMode && Engine.isNetMode()) {
+    if (window.Net?.release && player === 1) await Net.release(1);
+    else if (window.Net?.claim) await Net.claim(1);
+  } else {
+    Util.setPlayer(1);
+  }
+});
+
+if (p2Btn) p2Btn.addEventListener("click", async () => {
+  if (window.Engine?.isNetMode && Engine.isNetMode()) {
+    if (window.Net?.release && player === 2) await Net.release(2);
+    else if (window.Net?.claim) await Net.claim(2);
+  } else {
+    Util.setPlayer(2);
+  }
+});
 
 Util.hashPosition = function (nextPlayer = toMove) {
   let s = '' + nextPlayer + '|';
