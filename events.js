@@ -2,7 +2,8 @@
 window.Events = window.Events || {};
 
 Events.onPointerDown = function (e) {
-  if (e.button !== 0) return; // left only
+  if (e.pointerType !== 'touch' && e.button !== 0) return; // left only unless touch
+  if (e.pointerType === 'touch') e.preventDefault();
   const rect = canvas.getBoundingClientRect();
   const sx = e.clientX - rect.left;
   const sy = e.clientY - rect.top;
@@ -21,8 +22,11 @@ Events.onPointerMove = function (e) {
   const sx = e.clientX - rect.left;
   const sy = e.clientY - rect.top;
 
+  if (e.pointerType === 'touch') e.preventDefault();
+  
   mouse.x = sx;
   mouse.y = sy;
+
 
   const absf = Util.screenToAbs(sx, sy);
   const near = Util.absFloatToNearest(absf.ax, absf.ay);
@@ -56,7 +60,8 @@ Events.onPointerMove = function (e) {
 };
 
 Events.onPointerUp = function (e) {
-  if (e.button !== 0) return;
+  if (e.pointerType !== 'touch' && e.button !== 0) return;
+  if (e.pointerType === 'touch') e.preventDefault();
 
   const rect = canvas.getBoundingClientRect();
   const sx = e.clientX - rect.left;
@@ -183,11 +188,11 @@ passBtn.addEventListener('click', async () => {
   }
 });
 
-canvas.addEventListener('pointerdown', Events.onPointerDown);
-canvas.addEventListener('pointermove', Events.onPointerMove);
-canvas.addEventListener('pointerup', Events.onPointerUp);
 canvas.addEventListener('pointerleave', Events.onPointerLeave);
-canvas.addEventListener('pointercancel', Events.onPointerCancel);
+canvas.addEventListener('pointerdown', Events.onPointerDown, { passive: false });
+canvas.addEventListener('pointermove', Events.onPointerMove, { passive: false });
+canvas.addEventListener('pointerup', Events.onPointerUp, { passive: false });
+canvas.addEventListener('pointercancel', Events.onPointerCancel, { passive: false });
 canvas.addEventListener('wheel', Events.onWheel, { passive: false });
 
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
