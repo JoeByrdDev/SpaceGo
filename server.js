@@ -123,6 +123,7 @@ function requireSameOrigin(req, res, next) {
   return next();
 }
 
+
 const GUEST_COOKIE_NAME = "sg_guest";
 const GUEST_EXPIRES_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
@@ -296,14 +297,30 @@ wss.on("connection", async (ws, req) => {
 
   // (optional) allow client to request a resync
   ws.on("message", async (buf) => {
-    let m = null;
-    try { m = JSON.parse(buf.toString("utf8")); } catch {}
-    if (!m) return;
-    if (m.type === "resync") {
-      const fresh = await loadGameExact(gameId);
-      if (fresh) wsSend(ws, { type: "state", state: gamePublicState(fresh) });
-    }
-  });
+  let m = null;
+  try { m = JSON.parse(buf.toString("utf8")); } catch {}
+  if (!m) return;
+
+  // App-level heartbeat for browser clients.
+  // Browsers do not surface WS ping/pong frames to JS.
+  // Keep the connection "chatty" and give the client an inbound signal.
+  if (m.type === "ping") {
+    wsSend(ws, { type: "pong", t: m.t || Date.now() });
+    return;
+  }
+
+  // Client hello (optional; currently informational)
+  if (m.type === "hello") {
+    wsSend(ws, { type: "pong", t: Date.now() });
+    return;
+  }
+
+  if (m.type === "resync") {
+    const fresh = await loadGameExact(gameId);
+    if (fresh) wsSend(ws, { type: "state", state: gamePublicState(fresh) });
+  }
+});
+
 });
 
 // heartbeat

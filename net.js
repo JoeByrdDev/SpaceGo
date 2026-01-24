@@ -51,22 +51,6 @@ Net.loadGame = async function (gameId) {
   return { ok: true };
 };
 
-// Apply server-authoritative state into globals
-Net.applyState = function (state) {
-  // expected: { N, board, toMove, seen, phase, passStreak, deadSet, scoreResult }
-  if (state.N && state.N !== N) Util.setBoardSize(state.N);
-
-  if (state.board) board = state.board;
-  if (state.toMove) Util.setToMove(state.toMove);
-
-  if (state.seen) Util.seen = new Set(state.seen);
-
-  if (Engine && Engine._setServerPhase) Engine._setServerPhase(state);
-
-  Util.setTurnUI();
-  Render.requestRender();
-};
-
 // Server revision (authoritative). Updated on every Net.applyState.
 Net.rev = 0;
 
@@ -128,11 +112,66 @@ Net.cancel = function () {
   if (inFlight) inFlight.abort();
 };
 
+
+
+
+
+
+
+
+
+
+// --- WebSocket live updates (read-path) ---
 // --- WebSocket live updates (read-path) ---
 let ws = null;
 let wsGameId = null;
 let wsRetry = 0;
 let wsClosedByUs = false;
+
+let wsLastMsgAt = 0;
+let wsWatchdog = null;
+let wsHeartbeat = null;
+let wsNonce = 0;
+
+function markWsAlive() { wsLastMsgAt = Date.now(); }
+
+function startHeartbeat(myNonce) {
+  stopHeartbeat();
+  wsHeartbeat = setInterval(() => {
+    if (wsClosedByUs) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (myNonce !== wsNonce) return;
+    try { ws.send(JSON.stringify({ type: 'ping', t: Date.now() })); } catch {}
+  }, 25_000);
+}
+
+function stopHeartbeat() {
+  if (wsHeartbeat) clearInterval(wsHeartbeat);
+  wsHeartbeat = null;
+}
+
+function startWatchdog(myNonce) {
+  stopWatchdog();
+  wsLastMsgAt = Date.now();
+  wsWatchdog = setInterval(() => {
+    if (wsClosedByUs) return;
+    if (!wsGameId) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (myNonce !== wsNonce) return;
+
+    const age = Date.now() - wsLastMsgAt;
+
+    // If we haven't received *any* app-level traffic (pong/state/etc), force reconnect.
+    if (age > 70_000) {
+      try { ws.close(); } catch {}
+    }
+  }, 15_000);
+}
+
+function stopWatchdog() {
+  if (wsWatchdog) clearInterval(wsWatchdog);
+  wsWatchdog = null;
+}
 
 function wsUrlFor(gameId) {
   const proto = (location.protocol === 'https:') ? 'wss:' : 'ws:';
@@ -155,33 +194,44 @@ Net.connect = function (gameId) {
   // already connected to same game
   if (ws && ws.readyState === WebSocket.OPEN && wsGameId === gameId) return;
 
-  // drop any prior socket
+  // bump generation so old handlers become no-ops
+  wsNonce++;
+
+  // drop any prior socket without letting it schedule reconnects
   try { ws?.close(); } catch {}
   ws = null;
 
+  const myNonce = wsNonce;
   const url = wsUrlFor(gameId);
-  ws = new WebSocket(url);
+  const sock = new WebSocket(url);
+  ws = sock;
 
-  ws.onopen = () => {
+  sock.onopen = () => {
+    if (myNonce !== wsNonce) return;
     wsRetry = 0;
-    // optional: tell server we want a resync (server already pushes on connect)
-    try { ws.send(JSON.stringify({ type: 'hello', rev: Net.rev })); } catch {}
+    markWsAlive();
+    startHeartbeat(myNonce);
+    startWatchdog(myNonce);
+    try { sock.send(JSON.stringify({ type: 'hello', rev: Net.rev })); } catch {}
   };
 
-  ws.onmessage = (ev) => {
+  sock.onmessage = (ev) => {
+    if (myNonce !== wsNonce) return;
+    markWsAlive();
+
     let msg = null;
     try { msg = JSON.parse(ev.data); } catch {}
     if (!msg) return;
 
+    if (msg.type === 'pong') return;
+
     if (msg.type === 'state' && msg.state) {
-      // authoritative update from server
       Net.applyState(msg.state);
       return;
     }
 
     if (msg.type === 'deleted') {
       Util.setStatus('Game deleted');
-      // bounce to lobby
       window.location.href = '/';
       return;
     }
@@ -192,8 +242,12 @@ Net.connect = function (gameId) {
     }
   };
 
-  ws.onclose = () => {
+  sock.onclose = () => {
+    if (myNonce !== wsNonce) return;
+    stopHeartbeat();
+    stopWatchdog();
     ws = null;
+
     if (wsClosedByUs) return;
     wsRetry++;
     setTimeout(() => {
@@ -201,17 +255,30 @@ Net.connect = function (gameId) {
     }, wsBackoffMs());
   };
 
-  ws.onerror = () => {
-    // close triggers reconnect
-    try { ws?.close(); } catch {}
+  sock.onerror = () => {
+    if (myNonce !== wsNonce) return;
+    try { sock.close(); } catch {}
   };
 };
 
 Net.disconnect = function () {
   wsClosedByUs = true;
   wsGameId = null;
+  wsNonce++; // invalidate handlers
+  stopHeartbeat();
+  stopWatchdog();
   if (ws) {
     try { ws.close(); } catch {}
     ws = null;
   }
 };
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    if (!wsClosedByUs && wsGameId) Net.connect(wsGameId);
+  }
+});
+
+window.addEventListener('online', () => {
+  if (!wsClosedByUs && wsGameId) Net.connect(wsGameId);
+});
