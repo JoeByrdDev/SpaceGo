@@ -225,8 +225,44 @@ Util.setStatus = function (text) {
   statusPill.textContent = text;
 };
 
+Util.setScoringUI = function () {
+  const scoreBtn = document.getElementById("scoreBtn");
+  const finalizeBtn = document.getElementById("finalizeScoreBtn");
+  const acceptBtn = document.getElementById("acceptScoreBtn");
+  if (!scoreBtn || !finalizeBtn || !acceptBtn) return;
+
+  const netMode = window.Engine?.isNetMode && Engine.isNetMode();
+  if (!netMode) return;
+
+  const inScoring = (window.phase === "scoring");
+  const finished = (window.phase === "finished");
+  const hasDraft = !!window.scoreResult;
+
+  scoreBtn.style.display = (inScoring || finished) ? "" : "";
+  scoreBtn.disabled = finished;
+  scoreBtn.textContent = finished ? "Final Score" : (inScoring ? "Back to Play" : "Score");
+
+  finalizeBtn.style.display = inScoring ? "" : "none";
+  finalizeBtn.disabled = false;
+
+  acceptBtn.style.display = inScoring ? "" : (finished ? "" : "none");
+  acceptBtn.disabled = true;
+
+  if (finished && hasDraft) {
+    acceptBtn.textContent = "Finalized";
+  } else if (inScoring) {
+    const acc = window.score?.accept || { black: false, white: false };
+    const youKey = (window.player === 1) ? "black" : (window.player === 2) ? "white" : null;
+    const youAccepted = youKey ? !!acc[youKey] : false;
+    acceptBtn.disabled = !hasDraft;
+    acceptBtn.textContent = youAccepted ? "Accepted (waiting…)" : "Accept Scoring";
+  }
+
+};
+
 Util.setTurnUI = function () {
   turnPill.textContent = `Turn: ${toMove === 1 ? 'Black' : 'White'}`;
+  Util.setScoringUI();
   Util.setPlayerUI();
 };
 
@@ -272,6 +308,30 @@ Util.setPlayerUI = function () {
   if (p1Btn) p1Btn.disabled = player === 1;
   if (p2Btn) p2Btn.disabled = player === 2;
 };
+
+const scoreBtn = document.getElementById("scoreBtn");
+const finalizeBtn = document.getElementById("finalizeScoreBtn");
+const acceptBtn = document.getElementById("acceptScoreBtn");
+
+if (scoreBtn) scoreBtn.addEventListener("click", async () => {
+  if (!(window.Engine?.isNetMode && Engine.isNetMode())) return;
+
+  // If not in scoring, enter scoring. If in scoring, leave back to play.
+  if (window.phase !== "scoring") await Net.setPhase("scoring");
+  else await Net.setPhase("play");
+});
+
+if (finalizeBtn) finalizeBtn.addEventListener("click", async () => {
+  if (!(window.Engine?.isNetMode && Engine.isNetMode())) return;
+  if (window.phase !== "scoring") return;
+  await Net.finalizeScore();
+});
+
+if (acceptBtn) acceptBtn.addEventListener("click", async () => {
+  if (!(window.Engine?.isNetMode && Engine.isNetMode())) return;
+  if (window.phase !== "scoring") return;
+  await Net.acceptScore();
+});
 
 // Player picker bindings
 if (p1Btn) p1Btn.addEventListener("click", async () => {

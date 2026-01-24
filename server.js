@@ -543,6 +543,22 @@ function cleanName(name, fallback) {
   return s.slice(0, 60);
 }
 
+function seatKeyForSide(side) {
+  return side === 1 ? "black" : side === 2 ? "white" : null;
+}
+
+function invalidateScoreAccept(g) {
+  g.scoreAccept = { black: false, white: false };
+  g.scoreDraftRev = (g.scoreDraftRev || 0) + 1;
+}
+
+function maybeFinishIfAccepted(g) {
+  if (g.scoreAccept?.black && g.scoreAccept?.white) {
+    g.phase = "finished";
+    g.finishedAt = nowMs();
+  }
+}
+
 const SEAT_GUEST_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
 
 function actorFromReq(req) {
@@ -558,10 +574,6 @@ function pruneExpiredSeats(g) {
     if (!s) continue;
     if (s.kind === "guest" && s.expiresAt && s.expiresAt <= now) g.seats[k] = null;
   }
-}
-
-function seatKeyForSide(side) {
-  return side === 1 ? "black" : side === 2 ? "white" : null;
 }
 
 function sameOwner(a, b) {
@@ -647,6 +659,10 @@ function createGame(N = 19, name = "") {
     rev: 0,
     seen: [],
 
+    scoreAccept: { black: false, white: false },  // both must be true to finish
+    scoreDraftRev: 0,                              // bumps whenever deadSet/scoreResult changes
+    finishedAt: 0,                                 // 0 until finished
+	
     seats: {
       black: null, // { kind:'uid'|'guest', id:'...', claimedAt, expiresAt? }
       white: null,
@@ -678,8 +694,15 @@ function gamePublicState(g, actor = null) {
     posHash: hashPosition(g),
     createdAt: g.createdAt,
     updatedAt: g.updatedAt,
-
-    // new:
+    score: {
+      draftRev: g.scoreDraftRev || 0,
+      hasDraft: !!g.scoreResult,
+      accept: {
+        black: !!g.scoreAccept?.black,
+        white: !!g.scoreAccept?.white,
+      },
+      finishedAt: g.finishedAt || 0,
+    },
     seats: {
       blackTaken: !!(g.seats && g.seats.black),
       whiteTaken: !!(g.seats && g.seats.white),
@@ -834,37 +857,154 @@ function doToggleDead(g, ax, ay) {
   if (g.phase !== "scoring") return { ok: false, reason: "Not scoring" };
 
   const N = g.N;
-  const x = mod(ax, N);
-  const y = mod(ay, N);
+  const x0 = mod(ax, N);
+  const y0 = mod(ay, N);
 
-  const v = g.board[y][x];
-  if (v === 0) return { ok: false, reason: "Empty" };
+  const color = g.board[y0][x0];
+  if (color === 0) return { ok: false, reason: "Empty" };
 
-  const k = x + "," + y;
-  if (deadHas(g, k)) deadDel(g, k);
-  else deadAdd(g, k);
+  const key = (x, y) => x + "," + y;
+  const neighbors = (x, y) => ([
+    [mod(x + 1, N), y],
+    [mod(x - 1, N), y],
+    [x, mod(y + 1, N)],
+    [x, mod(y - 1, N)],
+  ]);
+
+  // collect connected group (stones only)
+  const stack = [[x0, y0]];
+  const seen = new Set([key(x0, y0)]);
+  const stones = [];
+
+  while (stack.length) {
+    const [x, y] = stack.pop();
+    stones.push([x, y]);
+
+    for (const [nx, ny] of neighbors(x, y)) {
+      if (g.board[ny][nx] !== color) continue;
+      const k = key(nx, ny);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      stack.push([nx, ny]);
+    }
+  }
+
+  // toggle whole group: if ANY is dead -> revive all, else kill all
+  let anyDead = false;
+  for (const [sx, sy] of stones) {
+    if (deadHas(g, key(sx, sy))) { anyDead = true; break; }
+  }
+
+  if (anyDead) {
+    for (const [sx, sy] of stones) deadDel(g, key(sx, sy));
+  } else {
+    for (const [sx, sy] of stones) deadAdd(g, key(sx, sy));
+  }
+
+  // draft score is now stale
+  g.scoreResult = null;
 
   g.updatedAt = nowMs();
   return { ok: true };
+}
+
+function computeScoreServer(g) {
+  const N = g.N;
+  const b = g.board;
+
+  const dead = new Set((g.deadSet || []).map(String));
+  const dkey = (x, y) => x + "," + y;
+
+  const valueForScoring = (x, y) => (dead.has(dkey(x, y)) ? 0 : b[y][x]);
+
+  let blackStones = 0, whiteStones = 0;
+  let blackTerritory = 0, whiteTerritory = 0, neutral = 0;
+
+  const ownership = Array.from({ length: N }, () => Array(N).fill(0));
+
+  // count stones (dead treated empty)
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const v = valueForScoring(x, y);
+      if (v === 1) blackStones++;
+      else if (v === 2) whiteStones++;
+    }
+  }
+
+  const key = (x, y) => x + "," + y;
+  const neighbors = (x, y) => ([
+    [mod(x + 1, N), y],
+    [mod(x - 1, N), y],
+    [x, mod(y + 1, N)],
+    [x, mod(y - 1, N)],
+  ]);
+
+  const visited = new Set();
+
+  // flood-fill empty regions, wrapped adjacency
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      if (valueForScoring(x, y) !== 0) continue;
+      const k0 = key(x, y);
+      if (visited.has(k0)) continue;
+
+      const stack = [[x, y]];
+      visited.add(k0);
+
+      const region = [];
+      let regionSize = 0;
+      const border = new Set(); // colors touching region
+
+      while (stack.length) {
+        const [cx, cy] = stack.pop();
+        region.push([cx, cy]);
+        regionSize++;
+
+        for (const [nx, ny] of neighbors(cx, cy)) {
+          const v = valueForScoring(nx, ny);
+          if (v === 0) {
+            const kk = key(nx, ny);
+            if (!visited.has(kk)) {
+              visited.add(kk);
+              stack.push([nx, ny]);
+            }
+          } else {
+            border.add(v);
+          }
+        }
+      }
+
+      if (border.size === 1) {
+        const owner = border.values().next().value; // 1 or 2
+        if (owner === 1) blackTerritory += regionSize;
+        else if (owner === 2) whiteTerritory += regionSize;
+
+        for (const [rx, ry] of region) ownership[ry][rx] = owner;
+      } else {
+        neutral += regionSize;
+      }
+    }
+  }
+
+  return {
+    blackStones, whiteStones,
+    blackTerritory, whiteTerritory,
+    neutral,
+    ownership,
+    blackTotal: blackStones + blackTerritory,
+    whiteTotal: whiteStones + whiteTerritory,
+  };
 }
 
 
 function doFinalizeScoring(g) {
   if (g.phase !== "scoring") return { ok: false, reason: "Not scoring" };
 
-  g.scoreResult = {
-    blackStones: 0,
-    whiteStones: 0,
-    blackTerritory: 0,
-    whiteTerritory: 0,
-    blackTotal: 0,
-    whiteTotal: 0,
-    note: "Server scoring not implemented yet",
-  };
-
+  g.scoreResult = computeScoreServer(g);
   g.updatedAt = nowMs();
   return { ok: true };
 }
+
 
 /* -----------------------------
    API
@@ -1036,11 +1176,58 @@ app.post("/api/move", rateLimit({
       await rdb.unwatch();
       return res.status(400).json({ ok: false, error: "Missing coordinates" });
     }
-    r = doToggleDead(g, ax, ay);
+    if (g.phase !== "scoring") {
+      r = { ok: false, reason: "Not in scoring" };
+    } else {
+      r = doToggleDead(g, ax, ay);
+      if (r.ok) {
+        // any change invalidates previous accepts + score draft
+        invalidateScoreAccept(g);
+        g.scoreResult = null; // force re-finalize after edits
+      }
+    }
 
   } else if (t === "finalizeScore") {
-    r = doFinalizeScoring(g);
-
+    if (g.phase !== "scoring") {
+      r = { ok: false, reason: "Not in scoring" };
+    } else {
+      r = doFinalizeScoring(g); // this should set g.scoreResult
+      if (r.ok) {
+        invalidateScoreAccept(g);
+        // optional: auto-accept for the proposer’s side (nice UX)
+        const k = seatKeyForSide(viewerSide(g, actor));
+        if (k) g.scoreAccept[k] = true;
+      }
+    }
+  } else if (t === "acceptScore") {
+    if (g.phase !== "scoring") {
+      r = { ok: false, reason: "Not in scoring" };
+    } else if (!g.scoreResult) {
+      r = { ok: false, reason: "No score draft" };
+    } else {
+      const side = viewerSide(g, actor); // 0/1/2
+      const k = seatKeyForSide(side);
+      if (!k) {
+        r = { ok: false, reason: "You don't own a seat" };
+      } else {
+        if (!g.scoreAccept) g.scoreAccept = { black: false, white: false };
+        g.scoreAccept[k] = true;
+        maybeFinishIfAccepted(g);
+        r = { ok: true };
+      }
+    }
+  } else if (t === "unacceptScore") {
+    if (g.phase !== "scoring") r = { ok: false, reason: "Not in scoring" };
+    else {
+      const side = viewerSide(g, actor);
+      const k = seatKeyForSide(side);
+      if (!k) r = { ok: false, reason: "You don't own a seat" };
+      else {
+        if (!g.scoreAccept) g.scoreAccept = { black: false, white: false };
+        g.scoreAccept[k] = false;
+        r = { ok: true };
+      }
+    }
   } else if (t === "resign") {
     g.phase = "scoring";
     const who =

@@ -26,12 +26,12 @@ Render.drawOnce = function () {
   const bottomA = camAY + (viewH / 2 + margin) / cell;
 
   Render.drawGridAbs(leftA, rightA, topA, bottomA);
-  if (Engine.getPhase && Engine.getPhase() === 'scoring') {
-  Render.drawTerritoryAbs(leftA, rightA, topA, bottomA);
-}
-  if (Engine.getPhase && Engine.getPhase() === 'scoring') {
-  Render.drawTerritoryAbs(leftA, rightA, topA, bottomA);
-}
+  
+  const ph = Engine.getPhase && Engine.getPhase();
+  if (ph === 'scoring' || ph === 'finished') {
+    Render.drawTerritoryAbs(leftA, rightA, topA, bottomA);
+  }
+
   Render.drawStonesAbs(leftA, rightA, topA, bottomA);
 
   // Hover indicator (absolute), repeated by +/-N
@@ -119,7 +119,8 @@ Render.drawStonesAbs = function(leftA, rightA, topA, bottomA) {
 
   const r = cell * 0.43;
 
-  const isScoring = Engine.getPhase && Engine.getPhase() === 'scoring';
+  const ph = Engine.getPhase && Engine.getPhase();
+  const isScoring = (ph === 'scoring' || ph === 'finished');
 
   for (let ax = x0; ax <= x1; ax++) {
     for (let ay = y0; ay <= y1; ay++) {

@@ -48,6 +48,12 @@ Net._get = async function (path, { signal } = {}) {
 Net.claim = (side) => Net.requestAction({ type: "claim", side });
 Net.release = (side) => Net.requestAction({ type: "release", side });
 Net.getSeatState = () => seatState;
+Net.setPhase = (phase) => Net.requestAction({ type: "setPhase", phase });
+Net.toggleDead = (ax, ay) => Net.requestAction({ type: "toggleDead", ax, ay });
+Net.finalizeScore = () => Net.requestAction({ type: "finalizeScore" });
+Net.acceptScore = () => Net.requestAction({ type: "acceptScore" });
+Net.unacceptScore = () => Net.requestAction({ type: "unacceptScore" });
+Net.proposeScore = () => Net.requestAction({ type: "finalizeScore" }); // keep existing endpoint action name
 
 Net.listGames = async function () {
   const r = await Net._get('/api/games');
@@ -87,7 +93,12 @@ Net.applyState = function (state) {
   if (state.you && typeof state.you.side === "number" && window.Util?.setPlayerServer) {
     Util.setPlayerServer(state.you.side);
   }
-
+  
+  window.phase = state.phase;
+  window.deadSet = state.deadSet || [];
+  window.scoreResult = state.scoreResult || null;
+  window.score = state.score || null;
+  Util.setScoringUI?.();
   Util.setTurnUI();
   Render.requestRender();
 };

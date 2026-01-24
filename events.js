@@ -175,6 +175,37 @@ Events.onPointerUp = function (e) {
     const near = Util.absFloatToNearest(absf.ax, absf.ay);
 
     if (Engine.getPhase && Engine.getPhase() === 'scoring') {
+      // In scoring, clicks toggle dead stones. In net mode this MUST go through server
+      // so both players see the same dead set via websocket/state updates.
+      if (Engine.isNetMode && Engine.isNetMode()) {
+        if (Engine.isNetBusy && Engine.isNetBusy()) return;
+
+        Engine._setNetBusy(true);
+        Util.setStatus('Sending…');
+        Render.requestRender();
+
+        Net.requestAction({
+          type: 'toggleDead',
+          ax: near.ax,
+          ay: near.ay,
+          bx: near.bx,
+          by: near.by,
+        }).then((rr) => {
+          if (!rr.ok) {
+            if (rr.reason !== 'Empty') Util.setStatus(rr.reason);
+          } else {
+            Util.setStatus('Marked');
+          }
+          Util.setTurnUI();
+          Render.requestRender();
+        }).finally(() => {
+          Engine._setNetBusy(false);
+        });
+
+        return;
+      }
+
+      // Local/offline scoring
       const r = Engine.toggleDeadAtAbs(near.ax, near.ay);
       if (!r.ok) {
         if (r.reason !== 'Empty') Util.setStatus(r.reason);
@@ -182,6 +213,7 @@ Events.onPointerUp = function (e) {
       Render.requestRender();
       return;
     }
+
 
     // Turn gate (insecure on purpose for now): only the selected side can move on its turn.
     if (!Util.canActNow()) {
