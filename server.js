@@ -5,7 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { createClient } from "redis";
 import http from "http";
-import { WebSocketServer } from "ws";
+import WebSocket, { WebSocketServer } from "ws";
 
 import cookieParser from "cookie-parser";
 import admin from "firebase-admin";
@@ -15,9 +15,6 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 8080;
-
-
-
 
 
 app.use(express.json());
@@ -47,6 +44,52 @@ const rdb = createClient({ url: REDIS_URL });
 rdb.on("error", (err) => console.error("redis error", err));
 
 await rdb.connect(); // node ESM top-level await is fine
+
+// rateLimit.js (or inline in server.js)
+
+const NOW = () => Math.floor(Date.now() / 1000);
+
+export function rateLimit({
+  capacity,
+  refillPerSec,
+  keyFn
+}) {
+  return async (req, res, next) => {
+    const keyId = keyFn(req);
+    const key = `rl:${keyId}`;
+    const now = NOW();
+
+    // Lua-free version (fast enough at your scale)
+    const data = await rdb.hGetAll(key);
+
+    let tokens = data.tokens ? Number(data.tokens) : capacity;
+    let lastTs = data.ts ? Number(data.ts) : now;
+	
+	if (!Number.isFinite(tokens)) tokens = capacity;
+	if (!Number.isFinite(lastTs)) lastTs = now;
+
+    const delta = Math.max(0, now - lastTs);
+    tokens = Math.min(capacity, tokens + delta * refillPerSec);
+	if (!Number.isFinite(tokens)) tokens = capacity;
+
+    if (tokens < 1) {
+      res.status(429).json({ error: "rate_limited" });
+      return;
+    }
+
+    tokens -= 1;
+
+    await rdb.hSet(key, {
+      tokens: tokens.toString(),
+      ts: now.toString()
+    });
+
+    // expire idle buckets
+    await rdb.expire(key, Math.ceil(capacity / refillPerSec) + 10);
+
+    next();
+  };
+}
 
 
 // For local HTTP dev, Secure cookies won't set.
@@ -80,6 +123,37 @@ function requireSameOrigin(req, res, next) {
   return next();
 }
 
+
+const GUEST_COOKIE = "sg_guest";
+const GUEST_EXPIRES_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
+
+function guestCookieOptions(req) {
+  const secure = isHttps(req) && process.env.NODE_ENV !== "development";
+  return {
+    httpOnly: true,
+    secure,
+    sameSite: "lax",
+    path: "/",
+    maxAge: GUEST_EXPIRES_MS,
+  };
+}
+
+function ensureGuest(req, res, next) {
+  if (req.user?.uid) return next();
+
+  let g = req.cookies?.[GUEST_COOKIE];
+  if (!g) {
+    g = crypto.randomBytes(18).toString("base64url");
+    res.cookie(GUEST_COOKIE, g, guestCookieOptions(req));
+  }
+  req.guestId = g;
+  next();
+}
+
+app.use(ensureGuest);
+
+
+
 async function authFromSessionCookie(req, res, next) {
   const cookie = req.cookies[SESSION_COOKIE_NAME];
   if (!cookie) {
@@ -102,6 +176,12 @@ async function authFromSessionCookie(req, res, next) {
 }
 
 app.use(authFromSessionCookie);
+
+function rateLimitId(req) {
+  if (req.user?.uid) return `u:${req.user.uid}`;
+  if (req.cookies?.sg_guest) return `g:${req.cookies.sg_guest}`;
+  return `ip:${req.ip}`;
+}
 
 
 // Client sends Firebase ID token after email/password sign-in.
@@ -179,16 +259,29 @@ function subDel(gameId, ws) {
 }
 
 function wsSend(ws, obj) {
-  if (ws.readyState !== ws.OPEN) return;
+  if (ws.readyState !== WebSocket.OPEN) return;
   try { ws.send(JSON.stringify(obj)); } catch {}
 }
+
 
 function publishGame(g) {
   const set = wsSubs.get(g.id);
   if (!set || set.size === 0) return;
-  const state = gamePublicState(g);
-  const msg = { type: "state", state };
-  for (const ws of set) wsSend(ws, msg);
+  for (const ws of set) {
+    wsSend(ws, { type: "state", state: gamePublicState(g, ws._actor || null) });
+  }
+}
+
+function parseCookies(h) {
+  const out = {};
+  (h || "").split(";").forEach(part => {
+    const i = part.indexOf("=");
+    if (i === -1) return;
+    const k = part.slice(0, i).trim();
+    const v = decodeURIComponent(part.slice(i + 1).trim());
+    out[k] = v;
+  });
+  return out;
 }
 
 const wss = new WebSocketServer({ server, path: "/ws" });
@@ -206,9 +299,22 @@ wss.on("connection", async (ws, req) => {
 
   const gameId = g.id;
   subAdd(gameId, ws);
+  
+  const cookies = parseCookies(req.headers.cookie);
+let actor = null;
 
-  // immediately send authoritative state snapshot
-  wsSend(ws, { type: "state", state: gamePublicState(g) });
+const sess = cookies[SESSION_COOKIE_NAME];
+if (sess) {
+  try {
+    const decoded = await admin.auth().verifySessionCookie(sess, true);
+    actor = { kind: "uid", id: decoded.uid };
+  } catch {}
+}
+if (!actor && cookies[GUEST_COOKIE]) actor = { kind: "guest", id: cookies[GUEST_COOKIE] };
+
+ws._actor = actor;
+wsSend(ws, { type:"state", state: gamePublicState(g, actor) });
+  
 
   ws.on("close", () => subDel(gameId, ws));
   ws.on("error", () => subDel(gameId, ws));
@@ -219,14 +325,30 @@ wss.on("connection", async (ws, req) => {
 
   // (optional) allow client to request a resync
   ws.on("message", async (buf) => {
-    let m = null;
-    try { m = JSON.parse(buf.toString("utf8")); } catch {}
-    if (!m) return;
-    if (m.type === "resync") {
-      const fresh = await loadGameExact(gameId);
-      if (fresh) wsSend(ws, { type: "state", state: gamePublicState(fresh) });
-    }
-  });
+  let m = null;
+  try { m = JSON.parse(buf.toString("utf8")); } catch {}
+  if (!m) return;
+
+  // App-level heartbeat for browser clients.
+  // Browsers do not surface WS ping/pong frames to JS.
+  // Keep the connection "chatty" and give the client an inbound signal.
+  if (m.type === "ping") {
+    wsSend(ws, { type: "pong", t: m.t || Date.now() });
+    return;
+  }
+
+  // Client hello (optional; currently informational)
+  if (m.type === "hello") {
+    wsSend(ws, { type: "pong", t: Date.now() });
+    return;
+  }
+
+  if (m.type === "resync") {
+    const fresh = await loadGameExact(gameId);
+    if (fresh) wsSend(ws, { type: "state", state: gamePublicState(fresh) });
+  }
+});
+
 });
 
 // heartbeat
@@ -421,6 +543,102 @@ function cleanName(name, fallback) {
   return s.slice(0, 60);
 }
 
+function seatKeyForSide(side) {
+  return side === 1 ? "black" : side === 2 ? "white" : null;
+}
+
+function invalidateScoreAccept(g) {
+  g.scoreAccept = { black: false, white: false };
+  g.scoreDraftRev = (g.scoreDraftRev || 0) + 1;
+}
+
+function maybeFinishIfAccepted(g) {
+  if (g.scoreAccept?.black && g.scoreAccept?.white) {
+    g.phase = "finished";
+    g.finishedAt = nowMs();
+  }
+}
+
+const SEAT_GUEST_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
+
+function actorFromReq(req) {
+  if (req.user?.uid) return { kind: "uid", id: req.user.uid };
+  if (req.guestId) return { kind: "guest", id: req.guestId };
+  return null;
+}
+
+function pruneExpiredSeats(g) {
+  const now = nowMs();
+  for (const k of ["black", "white"]) {
+    const s = g.seats?.[k];
+    if (!s) continue;
+    if (s.kind === "guest" && s.expiresAt && s.expiresAt <= now) g.seats[k] = null;
+  }
+}
+
+function sameOwner(a, b) {
+  return a && b && a.kind === b.kind && a.id === b.id;
+}
+
+function viewerSide(g, actor) {
+  if (!actor) return 0;
+  if (g.seats?.black && sameOwner(g.seats.black, actor)) return 1;
+  if (g.seats?.white && sameOwner(g.seats.white, actor)) return 2;
+  return 0;
+}
+
+function claimSeat(g, side, actor) {
+  pruneExpiredSeats(g);
+  const key = seatKeyForSide(side);
+  if (!key) return { ok: false, reason: "Bad side" };
+
+  const otherKey = key === "black" ? "white" : "black";
+
+  const cur = g.seats[key];
+  if (cur && !sameOwner(cur, actor)) return { ok: false, reason: "Seat taken" };
+
+  // EXCLUSIVE: if you own the other seat, drop it when switching
+  const other = g.seats[otherKey];
+  if (other && sameOwner(other, actor)) {
+    g.seats[otherKey] = null;
+  }
+
+  const seat = { kind: actor.kind, id: actor.id, claimedAt: nowMs() };
+  if (actor.kind === "guest") seat.expiresAt = nowMs() + SEAT_GUEST_TTL_MS;
+
+  g.seats[key] = seat;
+  g.updatedAt = nowMs();
+  return { ok: true };
+}
+
+
+function releaseSeat(g, side, actor) {
+  pruneExpiredSeats(g);
+  const key = seatKeyForSide(side);
+  if (!key) return { ok: false, reason: "Bad side" };
+
+  const cur = g.seats[key];
+  if (!cur) return { ok: true }; // already empty
+  if (!sameOwner(cur, actor)) return { ok: false, reason: "Not owner" };
+
+  g.seats[key] = null;
+  g.updatedAt = nowMs();
+  return { ok: true };
+}
+
+function requireTurnOwner(g, actor) {
+  pruneExpiredSeats(g);
+  const key = seatKeyForSide(g.toMove);
+  const cur = key ? g.seats?.[key] : null;
+  if (!cur) return { ok: false, reason: "Unclaimed side" };
+  if (!sameOwner(cur, actor)) return { ok: false, reason: "Not your turn" };
+
+  // refresh guest TTL on activity
+  if (cur.kind === "guest") cur.expiresAt = nowMs() + SEAT_GUEST_TTL_MS;
+  return { ok: true };
+}
+
+
 function createGame(N = 19, name = "") {
   const id = newGameId();
   const shortId = id.slice(0, 8);
@@ -436,11 +654,19 @@ function createGame(N = 19, name = "") {
     phase: "play",
     passStreak: 0,
 
-    deadSet: [],        // array of "x,y"
+    deadSet: [],
     scoreResult: null,
     rev: 0,
+    seen: [],
 
-    seen: [],           // array of position hashes
+    scoreAccept: { black: false, white: false },  // both must be true to finish
+    scoreDraftRev: 0,                              // bumps whenever deadSet/scoreResult changes
+    finishedAt: 0,                                 // 0 until finished
+	
+    seats: {
+      black: null, // { kind:'uid'|'guest', id:'...', claimedAt, expiresAt? }
+      white: null,
+    },
 
     createdAt: nowMs(),
     updatedAt: nowMs(),
@@ -450,7 +676,9 @@ function createGame(N = 19, name = "") {
   return g;
 }
 
-function gamePublicState(g) {
+
+function gamePublicState(g, actor = null) {
+  pruneExpiredSeats(g);
   return {
     gameId: g.id,
     name: g.name,
@@ -466,8 +694,25 @@ function gamePublicState(g) {
     posHash: hashPosition(g),
     createdAt: g.createdAt,
     updatedAt: g.updatedAt,
+    score: {
+      draftRev: g.scoreDraftRev || 0,
+      hasDraft: !!g.scoreResult,
+      accept: {
+        black: !!g.scoreAccept?.black,
+        white: !!g.scoreAccept?.white,
+      },
+      finishedAt: g.finishedAt || 0,
+    },
+    seats: {
+      blackTaken: !!(g.seats && g.seats.black),
+      whiteTaken: !!(g.seats && g.seats.white),
+    },
+    you: {
+      side: viewerSide(g, actor), // 0/1/2
+    },
   };
 }
+
 
 
 /* -----------------------------
@@ -612,37 +857,154 @@ function doToggleDead(g, ax, ay) {
   if (g.phase !== "scoring") return { ok: false, reason: "Not scoring" };
 
   const N = g.N;
-  const x = mod(ax, N);
-  const y = mod(ay, N);
+  const x0 = mod(ax, N);
+  const y0 = mod(ay, N);
 
-  const v = g.board[y][x];
-  if (v === 0) return { ok: false, reason: "Empty" };
+  const color = g.board[y0][x0];
+  if (color === 0) return { ok: false, reason: "Empty" };
 
-  const k = x + "," + y;
-  if (deadHas(g, k)) deadDel(g, k);
-  else deadAdd(g, k);
+  const key = (x, y) => x + "," + y;
+  const neighbors = (x, y) => ([
+    [mod(x + 1, N), y],
+    [mod(x - 1, N), y],
+    [x, mod(y + 1, N)],
+    [x, mod(y - 1, N)],
+  ]);
+
+  // collect connected group (stones only)
+  const stack = [[x0, y0]];
+  const seen = new Set([key(x0, y0)]);
+  const stones = [];
+
+  while (stack.length) {
+    const [x, y] = stack.pop();
+    stones.push([x, y]);
+
+    for (const [nx, ny] of neighbors(x, y)) {
+      if (g.board[ny][nx] !== color) continue;
+      const k = key(nx, ny);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      stack.push([nx, ny]);
+    }
+  }
+
+  // toggle whole group: if ANY is dead -> revive all, else kill all
+  let anyDead = false;
+  for (const [sx, sy] of stones) {
+    if (deadHas(g, key(sx, sy))) { anyDead = true; break; }
+  }
+
+  if (anyDead) {
+    for (const [sx, sy] of stones) deadDel(g, key(sx, sy));
+  } else {
+    for (const [sx, sy] of stones) deadAdd(g, key(sx, sy));
+  }
+
+  // draft score is now stale
+  g.scoreResult = null;
 
   g.updatedAt = nowMs();
   return { ok: true };
+}
+
+function computeScoreServer(g) {
+  const N = g.N;
+  const b = g.board;
+
+  const dead = new Set((g.deadSet || []).map(String));
+  const dkey = (x, y) => x + "," + y;
+
+  const valueForScoring = (x, y) => (dead.has(dkey(x, y)) ? 0 : b[y][x]);
+
+  let blackStones = 0, whiteStones = 0;
+  let blackTerritory = 0, whiteTerritory = 0, neutral = 0;
+
+  const ownership = Array.from({ length: N }, () => Array(N).fill(0));
+
+  // count stones (dead treated empty)
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const v = valueForScoring(x, y);
+      if (v === 1) blackStones++;
+      else if (v === 2) whiteStones++;
+    }
+  }
+
+  const key = (x, y) => x + "," + y;
+  const neighbors = (x, y) => ([
+    [mod(x + 1, N), y],
+    [mod(x - 1, N), y],
+    [x, mod(y + 1, N)],
+    [x, mod(y - 1, N)],
+  ]);
+
+  const visited = new Set();
+
+  // flood-fill empty regions, wrapped adjacency
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      if (valueForScoring(x, y) !== 0) continue;
+      const k0 = key(x, y);
+      if (visited.has(k0)) continue;
+
+      const stack = [[x, y]];
+      visited.add(k0);
+
+      const region = [];
+      let regionSize = 0;
+      const border = new Set(); // colors touching region
+
+      while (stack.length) {
+        const [cx, cy] = stack.pop();
+        region.push([cx, cy]);
+        regionSize++;
+
+        for (const [nx, ny] of neighbors(cx, cy)) {
+          const v = valueForScoring(nx, ny);
+          if (v === 0) {
+            const kk = key(nx, ny);
+            if (!visited.has(kk)) {
+              visited.add(kk);
+              stack.push([nx, ny]);
+            }
+          } else {
+            border.add(v);
+          }
+        }
+      }
+
+      if (border.size === 1) {
+        const owner = border.values().next().value; // 1 or 2
+        if (owner === 1) blackTerritory += regionSize;
+        else if (owner === 2) whiteTerritory += regionSize;
+
+        for (const [rx, ry] of region) ownership[ry][rx] = owner;
+      } else {
+        neutral += regionSize;
+      }
+    }
+  }
+
+  return {
+    blackStones, whiteStones,
+    blackTerritory, whiteTerritory,
+    neutral,
+    ownership,
+    blackTotal: blackStones + blackTerritory,
+    whiteTotal: whiteStones + whiteTerritory,
+  };
 }
 
 
 function doFinalizeScoring(g) {
   if (g.phase !== "scoring") return { ok: false, reason: "Not scoring" };
 
-  g.scoreResult = {
-    blackStones: 0,
-    whiteStones: 0,
-    blackTerritory: 0,
-    whiteTerritory: 0,
-    blackTotal: 0,
-    whiteTotal: 0,
-    note: "Server scoring not implemented yet",
-  };
-
+  g.scoreResult = computeScoreServer(g);
   g.updatedAt = nowMs();
   return { ok: true };
 }
+
 
 /* -----------------------------
    API
@@ -655,7 +1017,11 @@ app.get("/api/health", async (req, res) => {
 });
 
 
-app.get("/api/games", async (req, res) => {
+app.get("/api/games", rateLimit({
+    capacity: 60,
+    refillPerSec: 5, // burst ok
+    keyFn: rateLimitId
+  }), async (req, res) => {
   const ids = await rdb.zRange(K.updated, 0, 200, { REV: true });
   const out = [];
 
@@ -694,7 +1060,11 @@ app.delete("/api/game/:gameId", async (req, res) => {
 });
 
 // create new game (now accepts { N, name })
-app.post("/api/game/new", async (req, res) => {
+app.post("/api/game/new", rateLimit({
+    capacity: 3,
+    refillPerSec: 1 / 60, // 1 per minute
+    keyFn: rateLimitId
+  }), async (req, res) => {
   const Nraw = req.body?.N ?? 19;
   const name = req.body?.name ?? "";
 
@@ -716,10 +1086,20 @@ app.get("/api/game/:gameId", async (req, res) => {
 });
 
 // single action endpoint
-app.post("/api/move", async (req, res) => {
+app.post("/api/move", rateLimit({
+    capacity: 30,
+    refillPerSec: 1, // 1/sec sustained
+    keyFn: rateLimitId
+  }), async (req, res) => {
   const { gameId, action, rev, clientActionId } = req.body || {};
   if (!gameId || !action || !action.type) {
     return res.status(400).json({ ok: false, error: "Missing gameId/action" });
+  }
+
+  // identity (firebase uid or guest cookie)
+  const actor = actorFromReq(req);
+  if (!actor) {
+    return res.status(401).json({ ok: false, error: "No identity" });
   }
 
   // idempotency
@@ -744,41 +1124,120 @@ app.post("/api/move", async (req, res) => {
 
   if (!Number.isInteger(rev) || rev !== g.rev) {
     await rdb.unwatch();
-    return res.status(409).json({ ok: false, error: "Out of date", state: gamePublicState(g) });
+    return res.status(409).json({ ok: false, error: "Out of date", state: gamePublicState(g, actor) });
   }
 
   let r;
   const t = action.type;
 
-  if (t === "play") {
+  if (t === "claim") {
+    const side = Number(action.side);
+    if (side !== 1 && side !== 2) {
+      await rdb.unwatch();
+      return res.status(400).json({ ok: false, error: "Bad side" });
+    }
+    r = claimSeat(g, side, actor);
+
+  } else if (t === "release") {
+    const side = Number(action.side);
+    if (side !== 1 && side !== 2) {
+      await rdb.unwatch();
+      return res.status(400).json({ ok: false, error: "Bad side" });
+    }
+    r = releaseSeat(g, side, actor);
+
+  } else if (t === "play") {
     const ax = Number.isFinite(action.ax) ? action.ax : action.bx;
     const ay = Number.isFinite(action.ay) ? action.ay : action.by;
     if (!Number.isFinite(ax) || !Number.isFinite(ay)) {
       await rdb.unwatch();
       return res.status(400).json({ ok: false, error: "Missing coordinates" });
     }
-    r = tryPlay(g, ax, ay);
+
+    const gate = requireTurnOwner(g, actor);
+    if (!gate.ok) r = gate;
+    else r = tryPlay(g, ax, ay);
+
   } else if (t === "pass") {
-    r = doPass(g);
+    const gate = requireTurnOwner(g, actor);
+    if (!gate.ok) r = gate;
+    else r = doPass(g);
+
   } else if (t === "reset") {
     const N = action.N ?? g.N;
     r = doReset(g, Number(N));
+
   } else if (t === "setPhase") {
     r = doSetPhase(g, action.phase);
+
   } else if (t === "toggleDead") {
     const ax = action.ax, ay = action.ay;
     if (!Number.isFinite(ax) || !Number.isFinite(ay)) {
       await rdb.unwatch();
       return res.status(400).json({ ok: false, error: "Missing coordinates" });
     }
-    r = doToggleDead(g, ax, ay);
+    if (g.phase !== "scoring") {
+      r = { ok: false, reason: "Not in scoring" };
+    } else {
+      r = doToggleDead(g, ax, ay);
+      if (r.ok) {
+        // any change invalidates previous accepts + score draft
+        invalidateScoreAccept(g);
+        g.scoreResult = null; // force re-finalize after edits
+      }
+    }
+
   } else if (t === "finalizeScore") {
-    r = doFinalizeScoring(g);
+    if (g.phase !== "scoring") {
+      r = { ok: false, reason: "Not in scoring" };
+    } else {
+      r = doFinalizeScoring(g); // this should set g.scoreResult
+      if (r.ok) {
+        invalidateScoreAccept(g);
+        // optional: auto-accept for the proposer’s side (nice UX)
+        const k = seatKeyForSide(viewerSide(g, actor));
+        if (k) g.scoreAccept[k] = true;
+      }
+    }
+  } else if (t === "acceptScore") {
+    if (g.phase !== "scoring") {
+      r = { ok: false, reason: "Not in scoring" };
+    } else if (!g.scoreResult) {
+      r = { ok: false, reason: "No score draft" };
+    } else {
+      const side = viewerSide(g, actor); // 0/1/2
+      const k = seatKeyForSide(side);
+      if (!k) {
+        r = { ok: false, reason: "You don't own a seat" };
+      } else {
+        if (!g.scoreAccept) g.scoreAccept = { black: false, white: false };
+        g.scoreAccept[k] = true;
+        maybeFinishIfAccepted(g);
+        r = { ok: true };
+      }
+    }
+  } else if (t === "unacceptScore") {
+    if (g.phase !== "scoring") r = { ok: false, reason: "Not in scoring" };
+    else {
+      const side = viewerSide(g, actor);
+      const k = seatKeyForSide(side);
+      if (!k) r = { ok: false, reason: "You don't own a seat" };
+      else {
+        if (!g.scoreAccept) g.scoreAccept = { black: false, white: false };
+        g.scoreAccept[k] = false;
+        r = { ok: true };
+      }
+    }
   } else if (t === "resign") {
     g.phase = "scoring";
-    g.scoreResult = { note: `${action.player || "A player"} resigned` };
+    const who =
+      actor.kind === "uid" ? `uid:${actor.id}` :
+      actor.kind === "guest" ? "guest" :
+      "player";
+    g.scoreResult = { note: `${who} resigned` };
     g.updatedAt = nowMs();
     r = { ok: true };
+
   } else {
     await rdb.unwatch();
     return res.status(400).json({ ok: false, error: "Unknown action type" });
@@ -788,13 +1247,25 @@ app.post("/api/move", async (req, res) => {
 
   let payload;
   if (!r.ok) {
-    payload = { ok: true, accepted: false, reason: r.reason || "Rejected", state: gamePublicState(g) };
+    payload = {
+      ok: true,
+      accepted: false,
+      reason: r.reason || "Rejected",
+      state: gamePublicState(g, actor),
+    };
   } else {
     if (countsAsMove) g.moveCount += 1;
+
+    // any accepted action that mutates state bumps rev
     g.rev += 1;
     g.updatedAt = nowMs();
 
-    payload = { ok: true, accepted: true, meta: { captured: r.captured || 0 }, state: gamePublicState(g) };
+    payload = {
+      ok: true,
+      accepted: true,
+      meta: { captured: r.captured || 0 },
+      state: gamePublicState(g, actor),
+    };
   }
 
   // transaction commit
@@ -805,9 +1276,12 @@ app.post("/api/move", async (req, res) => {
 
   const execRes = await multi.exec(); // null => watched key changed
   if (execRes === null) {
-    // someone else wrote first; return authoritative
     const fresh = await rgetJson(key);
-    return res.status(409).json({ ok: false, error: "Out of date", state: gamePublicState(fresh || g) });
+    return res.status(409).json({
+      ok: false,
+      error: "Out of date",
+      state: gamePublicState(fresh || g, actor),
+    });
   }
 
   publishGame(g);

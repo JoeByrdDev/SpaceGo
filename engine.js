@@ -34,10 +34,11 @@ Engine._setServerPhase = function (state) {
   scoreResult = state.scoreResult || null;
 
   // keep status text consistent
-  if (phase === 'scoring' && scoreResult) {
+  if ((phase === 'scoring' || phase === 'finished') && scoreResult) {
     const s = scoreResult;
     Util.setStatus(
-      `Scoring — B:${s.blackTotal} (S${s.blackStones}+T${s.blackTerritory}) ` +
+      `${phase === 'finished' ? 'Final' : 'Scoring'} — ` +
+      `B:${s.blackTotal} (S${s.blackStones}+T${s.blackTerritory}) ` +
       `W:${s.whiteTotal} (S${s.whiteStones}+T${s.whiteTerritory})`
     );
   } else {

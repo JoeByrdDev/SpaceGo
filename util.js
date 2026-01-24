@@ -82,6 +82,7 @@ Util._playerLabel = function (p) {
   return 'Observer';
 };
 
+/*
 Util.setPlayerCookieKey = function (key) {
   playerCookieKey = key || 'sg_player';
   const raw = Util._cookieGet(playerCookieKey);
@@ -90,6 +91,7 @@ Util.setPlayerCookieKey = function (key) {
   Util._syncGlobals();
   Util.setPlayerUI();
 };
+*/
 
 Util.getPlayer = function () {
   return player;
@@ -103,6 +105,14 @@ Util.setPlayer = function (p) {
   Util._syncGlobals();
   Util.setPlayerUI();
   if (window.Render && Render.requestRender) Render.requestRender();
+};
+
+// add near Util.setPlayer (right after it is fine)
+Util.setPlayerServer = function (p) {
+  const v = (p === 1 || p === 2) ? p : 0;
+  player = v;
+  Util._syncGlobals();
+  Util.setPlayerUI(); // also refresh seat buttons
 };
 
 Util.canActNow = function () {
@@ -215,9 +225,78 @@ Util.setStatus = function (text) {
   statusPill.textContent = text;
 };
 
+Util.setScoringUI = function () {
+  const scoreBtn = document.getElementById("scoreBtn");
+  const finalizeBtn = document.getElementById("finalizeScoreBtn");
+  const acceptBtn = document.getElementById("acceptScoreBtn");
+  if (!scoreBtn || !finalizeBtn || !acceptBtn) return;
+
+  const netMode = window.Engine?.isNetMode && Engine.isNetMode();
+  if (!netMode) return;
+
+  const inScoring = (window.phase === "scoring");
+  const finished = (window.phase === "finished");
+  const hasDraft = !!window.scoreResult;
+
+  scoreBtn.style.display = (inScoring || finished) ? "" : "";
+  scoreBtn.disabled = finished;
+  scoreBtn.textContent = finished ? "Final Score" : (inScoring ? "Back to Play" : "Score");
+
+  finalizeBtn.style.display = inScoring ? "" : "none";
+  finalizeBtn.disabled = false;
+
+  acceptBtn.style.display = inScoring ? "" : (finished ? "" : "none");
+  acceptBtn.disabled = true;
+
+  if (finished && hasDraft) {
+    acceptBtn.textContent = "Finalized";
+  } else if (inScoring) {
+    const acc = window.score?.accept || { black: false, white: false };
+    const youKey = (window.player === 1) ? "black" : (window.player === 2) ? "white" : null;
+    const youAccepted = youKey ? !!acc[youKey] : false;
+    acceptBtn.disabled = !hasDraft;
+    acceptBtn.textContent = youAccepted ? "Accepted (waiting…)" : "Accept Scoring";
+  }
+
+};
+
 Util.setTurnUI = function () {
   turnPill.textContent = `Turn: ${toMove === 1 ? 'Black' : 'White'}`;
+  Util.setScoringUI();
   Util.setPlayerUI();
+};
+
+Util.setSeatButtonsUI = function () {
+  const p1Btn = document.getElementById("p1Btn"); // Black button
+  const p2Btn = document.getElementById("p2Btn"); // White button
+  if (!p1Btn || !p2Btn) return;
+
+  const netMode = window.Engine?.isNetMode && Engine.isNetMode();
+  if (!netMode) return;
+
+  const seats = window.Net?.getSeatState ? Net.getSeatState() : { blackTaken:false, whiteTaken:false };
+
+  // compute ownership
+  const youBlack = (player === 1);
+  const youWhite = (player === 2);
+
+  // availability (taken by someone else)
+  const blackTakenOther = seats.blackTaken && !youBlack;
+  const whiteTakenOther = seats.whiteTaken && !youWhite;
+
+  // text
+  p1Btn.textContent = youBlack ? "Black (You)" : (blackTakenOther ? "Black (Taken)" : "Play as Black");
+  p2Btn.textContent = youWhite ? "White (You)" : (whiteTakenOther ? "White (Taken)" : "Play as White");
+
+  // disable if taken by other
+  p1Btn.disabled = blackTakenOther;
+  p2Btn.disabled = whiteTakenOther;
+
+  // classes for styling
+  p1Btn.classList.toggle("seat-taken", blackTakenOther);
+  p2Btn.classList.toggle("seat-taken", whiteTakenOther);
+  p1Btn.classList.toggle("seat-you", youBlack);
+  p2Btn.classList.toggle("seat-you", youWhite);
 };
 
 Util.setPlayerUI = function () {
@@ -225,14 +304,53 @@ Util.setPlayerUI = function () {
   const label = Util._playerLabel(player);
   const suffix = (player !== 0 && player === toMove) ? ' (your turn)' : '';
   youPill.textContent = `You: ${label}${suffix}`;
-
+  if (Util.setSeatButtonsUI) Util.setSeatButtonsUI();
   if (p1Btn) p1Btn.disabled = player === 1;
   if (p2Btn) p2Btn.disabled = player === 2;
 };
 
+const scoreBtn = document.getElementById("scoreBtn");
+const finalizeBtn = document.getElementById("finalizeScoreBtn");
+const acceptBtn = document.getElementById("acceptScoreBtn");
+
+if (scoreBtn) scoreBtn.addEventListener("click", async () => {
+  if (!(window.Engine?.isNetMode && Engine.isNetMode())) return;
+
+  // If not in scoring, enter scoring. If in scoring, leave back to play.
+  if (window.phase !== "scoring") await Net.setPhase("scoring");
+  else await Net.setPhase("play");
+});
+
+if (finalizeBtn) finalizeBtn.addEventListener("click", async () => {
+  if (!(window.Engine?.isNetMode && Engine.isNetMode())) return;
+  if (window.phase !== "scoring") return;
+  await Net.finalizeScore();
+});
+
+if (acceptBtn) acceptBtn.addEventListener("click", async () => {
+  if (!(window.Engine?.isNetMode && Engine.isNetMode())) return;
+  if (window.phase !== "scoring") return;
+  await Net.acceptScore();
+});
+
 // Player picker bindings
-if (p1Btn) p1Btn.addEventListener('click', () => Util.setPlayer(1));
-if (p2Btn) p2Btn.addEventListener('click', () => Util.setPlayer(2));
+if (p1Btn) p1Btn.addEventListener("click", async () => {
+  if (window.Engine?.isNetMode && Engine.isNetMode()) {
+    if (window.Net?.release && player === 1) await Net.release(1);
+    else if (window.Net?.claim) await Net.claim(1);
+  } else {
+    Util.setPlayer(1);
+  }
+});
+
+if (p2Btn) p2Btn.addEventListener("click", async () => {
+  if (window.Engine?.isNetMode && Engine.isNetMode()) {
+    if (window.Net?.release && player === 2) await Net.release(2);
+    else if (window.Net?.claim) await Net.claim(2);
+  } else {
+    Util.setPlayer(2);
+  }
+});
 
 Util.hashPosition = function (nextPlayer = toMove) {
   let s = '' + nextPlayer + '|';
