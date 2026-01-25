@@ -243,32 +243,14 @@ Util.setPendingMove = function (m) {
   Render.requestRender?.();
 };
 
-Util.isTouchConfirm = function () {
-  // prefer “no hover + coarse pointer” (phones/tablets)
-  try {
-    return window.matchMedia && window.matchMedia('(hover: none) and (pointer: coarse)').matches;
-  } catch {
-    return (navigator.maxTouchPoints || 0) > 0;
-  }
-};
-
 const previewBtn = document.getElementById('previewBtn');
 
-let previewMode = false;
-
-(function initPreviewMode() {
-  let stored = null;
-  try { stored = localStorage.getItem('sg_preview_mode'); } catch {}
-  if (stored === '1') previewMode = true;
-  else if (stored === '0') previewMode = false;
-  else previewMode = !!(Util.isTouchConfirm && Util.isTouchConfirm()); // default: on for touch devices
-})();
+let previewMode = true;
 
 Util.getPreviewMode = () => previewMode;
 
 Util.setPreviewMode = function (on) {
   previewMode = !!on;
-  try { localStorage.setItem('sg_preview_mode', previewMode ? '1' : '0'); } catch {}
 
   if (!previewMode) Util.setPendingMove(null);
 
