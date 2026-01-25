@@ -10,21 +10,25 @@
 <body>
 <div id="wrap">
   <div id="topbar">
-    <div class="pill" id="turnPill">Turn: Black</div>
-    <div class="pill" id="youPill">You: Observer</div>
-    <div class="pill" id="statusPill">Ready</div>
+    <div id="topbar-main">
+      <div class="pill" id="turnPill">Turn: Black</div>
 
-    <button id="p1Btn" title="Claim/Release Black seat">Play as Black</button>
-    <button id="p2Btn" title="Claim/Release White seat">Play as White</button>
+      <button id="p1Btn" title="Claim/Release Black seat">Play as Black</button>
+      <button id="p2Btn" title="Claim/Release White seat">Play as White</button>
 
-    <button id="gamesBtn">Games</button>
+      <button id="gamesBtn">Games</button>
 
-    <button id="passBtn" title="Pass your turn">Pass</button>
+      <button id="passBtn" title="Pass your turn">Pass</button>
 
-    <!-- Scoring controls (wire up in util.js/net.js) -->
-    <button id="scoreBtn" title="Enter scoring / mark dead stones">Score</button>
-    <button id="finalizeScoreBtn" title="Compute a score draft from current dead markings">Finalize Score</button>
-    <button id="acceptScoreBtn" title="Accept the current score draft">Accept Scoring</button>
+      <button id="scoreBtn" title="Enter scoring / mark dead stones">Score</button>
+      <button id="finalizeScoreBtn" title="Compute a score draft from current dead markings">Finalize Score</button>
+      <button id="acceptScoreBtn" title="Accept the current score draft">Accept Scoring</button>
+    </div>
+
+    <div id="topbar-status">
+      <div class="pill" id="youPill">You: Observer</div>
+      <div class="pill" id="statusPill">Ready</div>
+    </div>
 
     <div id="hint">Drag to pan • Click to place</div>
   </div>

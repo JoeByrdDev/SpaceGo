@@ -10,16 +10,25 @@ html, body {
   height: 100%;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 #topbar {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   padding: 10px 12px;
   background: #0f1318;
   border-bottom: 1px solid #202733;
   user-select: none;
+}
+
+#topbar-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 #topbar .pill {
@@ -51,21 +60,48 @@ html, body {
   color: #e9eef5;
 }
 
-#game-shell {
-  width: 900px;
-  height: 600px;
-  resize: both;
-  overflow: hidden;
-  border: 1px solid #2a3443;
+#topbar-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-/* Canvas */
+/* 50/50 split for the two dynamic pills */
+#topbar-status .pill {
+  flex: 1;
+  width: 0;              /* ensures true 50/50 split even with long text */
+  box-sizing: border-box;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#statusPill {
+  display: block !important;
+}
+
+#statusPill[hidden] {
+  display: block !important;
+}
+
+#game-shell {
+  flex: 1;
+  min-height: 0;
+  margin: 0 12px 12px 12px;
+  border: 1px solid #2a3443;
+  border-radius: 12px;
+  overflow: hidden;
+  resize: none;
+  width: auto;
+  height: auto;
+}
+
 #canvas {
   flex: 1;
   display: block;
   width: 100%;
   height: 100%;
-  touch-action: none;          /* allow touch pan/drag */
+  touch-action: none;
   -webkit-user-select: none;
   user-select: none;
 }
@@ -73,7 +109,6 @@ html, body {
 #hint {
   opacity: 0.8;
   font-size: 12px;
-  margin-left: auto;
 }
 
 .seat-taken {
@@ -85,36 +120,46 @@ html, body {
   outline: 2px solid currentColor;
 }
 
-/* -------------------------------------------------- */
-/* Mobile / small screens */
-/* -------------------------------------------------- */
 @media (max-width: 900px), (max-height: 700px) {
   html, body {
     height: 100%;
-    overflow: hidden; /* prevent page scroll while panning */
+    overflow: hidden;
   }
 
-  :root {
-    --topbar-h: 56px; /* adjust if your topbar height changes */
+  #topbar {
+    padding: 6px 8px;
+    gap: 6px;
+  }
+
+  #topbar-main {
+    gap: 6px;
+  }
+
+  #topbar button {
+    padding: 7px 8px;
+  }
+
+  #topbar .pill {
+    padding: 5px 8px;
+  }
+
+  /* keep status/you stable height */
+  #topbar-status .pill {
+    min-height: 32px;
+    display: flex;
+    align-items: center;
+  }
+
+  /* keep hint from taking vertical space */
+  #hint {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.1;
   }
 
   #game-shell {
-    position: fixed;
-    left: 0;
-    right: 0;
-    top: var(--topbar-h);
-    bottom: 0;
-
-    width: auto;
-    height: auto;
-
-    resize: none;     /* disable desktop resize handles */
-    overflow: hidden;
-    border-radius: 0;
-  }
-
-  #canvas {
-    width: 100%;
-    height: 100%;
+    margin: 0 8px 8px 8px;
+    border-radius: 10px;
   }
 }
