@@ -34,8 +34,14 @@ Render.drawOnce = function () {
 
   Render.drawStonesAbs(leftA, rightA, topA, bottomA);
 
-  // Hover indicator (absolute), repeated by +/-N
-  if (mouse.over) Render.drawHoverAbs(mouse.over.ax, mouse.over.ay);
+  // Hover/ghost indicator (absolute), repeated by +/-N
+  const pm = (window.Util && Util.getPendingMove) ? Util.getPendingMove() : null;
+
+  if (ph === 'play') {
+    if (pm) Render.drawHoverAbs(pm.ax, pm.ay);
+    else if (mouse.over) Render.drawHoverAbs(mouse.over.ax, mouse.over.ay);
+  }
+
 
   // Subtle center crosshair
   ctx.strokeStyle = 'rgba(233,238,245,0.08)';

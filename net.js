@@ -76,6 +76,7 @@ Net.loadGame = async function (gameId) {
 Net.rev = 0;
 
 Net.applyState = function (state) {
+  const oldToMove = window.toMove;
   if (typeof state.rev === 'number') Net.rev = state.rev;
   if (state.N && state.N !== N) Util.setBoardSize(state.N);
 
@@ -98,6 +99,17 @@ Net.applyState = function (state) {
   window.deadSet = state.deadSet || [];
   window.scoreResult = state.scoreResult || null;
   window.score = state.score || null;
+  
+  if (window.Util?.getPendingMove && window.Util?.setPendingMove) {
+    const pm = Util.getPendingMove();
+    if (pm) {
+      // any turn/phase change invalidates the preview
+      if (state.phase !== 'play' || (typeof state.toMove === 'number' && state.toMove !== oldToMove)) {
+        Util.setPendingMove(null);
+      }
+    }
+  }
+
   Util.setScoringUI?.();
   Util.setTurnUI();
   Render.requestRender();

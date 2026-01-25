@@ -233,6 +233,24 @@ Events.onPointerUp = function (e) {
       Render.requestRender();
       return;
     }
+	
+	const prevOn = Util.getPreviewMode && Util.getPreviewMode();
+    if (prevOn) {
+      const pm = Util.getPendingMove && Util.getPendingMove();
+
+      // click/tap same point again = cancel
+      if (pm && pm.ax === near.ax && pm.ay === near.ay) {
+        Util.setPendingMove(null);
+        Util.setStatus('Cancelled');
+        Render.requestRender();
+        return;
+      }
+
+      Util.setPendingMove({ ax: near.ax, ay: near.ay, bx: near.bx, by: near.by });
+      Util.setStatus('Confirm');
+      Render.requestRender();
+      return;
+    }
 
     if (!Engine.isNetMode || !Engine.isNetMode()) {
       Engine.applyStateLocal(r0.next);

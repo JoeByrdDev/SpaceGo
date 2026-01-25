@@ -218,47 +218,139 @@ Util.resizeCanvas = function (cssW, cssH) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   Util._syncGlobals();
-  Render.requestRender();
+  if (window.Render && Render.requestRender) Render.requestRender();
 };
 
 Util.setStatus = function (text) {
   statusPill.textContent = text;
 };
 
+let pendingMove = null; // { ax, ay, bx, by } or null
+
+Util.getPendingMove = () => pendingMove;
+
+Util.setPendingMove = function (m) {
+  pendingMove = m || null;
+
+  // keep the ghost visible even without hover on touch
+  if (pendingMove) {
+    window.mouse = window.mouse || {};
+    window.mouse.over = { ax: pendingMove.ax, ay: pendingMove.ay, bx: pendingMove.bx, by: pendingMove.by };
+  }
+
+  Util._syncGlobals();
+  Util.setScoringUI?.();
+  Render.requestRender?.();
+};
+
+Util.isTouchConfirm = function () {
+  // prefer “no hover + coarse pointer” (phones/tablets)
+  try {
+    return window.matchMedia && window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+  } catch {
+    return (navigator.maxTouchPoints || 0) > 0;
+  }
+};
+
+const previewBtn = document.getElementById('previewBtn');
+
+let previewMode = false;
+
+(function initPreviewMode() {
+  let stored = null;
+  try { stored = localStorage.getItem('sg_preview_mode'); } catch {}
+  if (stored === '1') previewMode = true;
+  else if (stored === '0') previewMode = false;
+  else previewMode = !!(Util.isTouchConfirm && Util.isTouchConfirm()); // default: on for touch devices
+})();
+
+Util.getPreviewMode = () => previewMode;
+
+Util.setPreviewMode = function (on) {
+  previewMode = !!on;
+  try { localStorage.setItem('sg_preview_mode', previewMode ? '1' : '0'); } catch {}
+
+  if (!previewMode) Util.setPendingMove(null);
+
+  Util.setScoringUI?.();
+  if (window.Render && Render.requestRender) Render.requestRender();
+};
+
+Util.togglePreviewMode = function () {
+  Util.setPreviewMode(!previewMode);
+};
+
+if (previewBtn) previewBtn.addEventListener('click', () => {
+  Util.togglePreviewMode();
+  Util.setStatus(previewMode ? 'Preview On' : 'Preview Off');
+});
+
+
 Util.setScoringUI = function () {
   const scoreBtn = document.getElementById("scoreBtn");
   const finalizeBtn = document.getElementById("finalizeScoreBtn");
   const acceptBtn = document.getElementById("acceptScoreBtn");
+  const previewBtn = document.getElementById("previewBtn");
   if (!scoreBtn || !finalizeBtn || !acceptBtn) return;
 
-  const netMode = window.Engine?.isNetMode && Engine.isNetMode();
-  if (!netMode) return;
-
-  const inScoring = (window.phase === "scoring");
-  const finished = (window.phase === "finished");
+  const ph = (window.Engine?.getPhase ? Engine.getPhase() : window.phase) || "play";
+  const inScoring = (ph === "scoring");
+  const finished = (ph === "finished");
   const hasDraft = !!window.scoreResult;
 
-  scoreBtn.style.display = (inScoring || finished) ? "" : "";
-  scoreBtn.disabled = finished;
-  scoreBtn.textContent = finished ? "Final Score" : (inScoring ? "Back to Play" : "Score");
+  // Hide preview toggle outside normal play
+  if (previewBtn) {
+    previewBtn.style.display = (ph === "play") ? "" : "none";
+    previewBtn.disabled = false;
+    previewBtn.textContent = `Preview: ${Util.getPreviewMode && Util.getPreviewMode() ? "On" : "Off"}`;
+  }
 
-  finalizeBtn.style.display = inScoring ? "" : "none";
-  finalizeBtn.disabled = false;
+  if (finished) {
+    scoreBtn.style.display = "none";
+    finalizeBtn.style.display = "none";
 
-  acceptBtn.style.display = inScoring ? "" : (finished ? "" : "none");
-  acceptBtn.disabled = true;
+    acceptBtn.style.display = "";
+    acceptBtn.disabled = true;
+    acceptBtn.textContent = hasDraft ? "Finalized" : "Finished";
+    Util.setPendingMove(null);
+    return;
+  }
 
-  if (finished && hasDraft) {
-    acceptBtn.textContent = "Finalized";
-  } else if (inScoring) {
+  if (inScoring) {
+    scoreBtn.style.display = "";
+    scoreBtn.disabled = false;
+    scoreBtn.textContent = "Resume Play";
+
+    finalizeBtn.style.display = "";
+    finalizeBtn.disabled = false;
+
+    acceptBtn.style.display = "";
     const acc = window.score?.accept || { black: false, white: false };
     const youKey = (window.player === 1) ? "black" : (window.player === 2) ? "white" : null;
     const youAccepted = youKey ? !!acc[youKey] : false;
+
     acceptBtn.disabled = !hasDraft;
     acceptBtn.textContent = youAccepted ? "Accepted (waiting…)" : "Accept Scoring";
+    Util.setPendingMove(null);
+    return;
   }
 
+  // Play: never manual scoring entry. Confirm appears only when Preview is ON.
+  finalizeBtn.style.display = "none";
+  acceptBtn.style.display = "none";
+
+  const prevOn = Util.getPreviewMode && Util.getPreviewMode();
+  if (prevOn) {
+    scoreBtn.style.display = "";
+    scoreBtn.textContent = "Confirm";
+    scoreBtn.disabled = !Util.getPendingMove();
+  } else {
+    scoreBtn.style.display = "none";
+    if (Util.getPendingMove && Util.getPendingMove()) Util.setPendingMove(null);
+  }
 };
+
+
 
 Util.setTurnUI = function () {
   turnPill.textContent = `Turn: ${toMove === 1 ? 'Black' : 'White'}`;
@@ -314,11 +406,71 @@ const finalizeBtn = document.getElementById("finalizeScoreBtn");
 const acceptBtn = document.getElementById("acceptScoreBtn");
 
 if (scoreBtn) scoreBtn.addEventListener("click", async () => {
-  if (!(window.Engine?.isNetMode && Engine.isNetMode())) return;
+  const ph = (window.Engine?.getPhase ? Engine.getPhase() : window.phase) || "play";
 
-  // If not in scoring, enter scoring. If in scoring, leave back to play.
-  if (window.phase !== "scoring") await Net.setPhase("scoring");
-  else await Net.setPhase("play");
+  // In scoring: “Resume Play”
+  if (ph === "scoring") {
+    if (window.Engine?.isNetMode && Engine.isNetMode()) {
+      await Net.setPhase("play");
+    } else {
+      Engine.exitScoring?.();
+    }
+    Util.setPendingMove(null);
+    return;
+  }
+
+  // In play: “Confirm” pending move (touch UI only)
+  const pm = Util.getPendingMove?.();
+  if (!pm) return;
+
+  // Turn gate (same as tap gate)
+  if (!Util.canActNow()) {
+    Util.setStatus(Util.getPlayer() === 0 ? "Select Black or White" : "Not your turn");
+    Render.requestRender();
+    return;
+  }
+
+  // Local mode
+  if (!(window.Engine?.isNetMode && Engine.isNetMode())) {
+    const r = Engine.tryPlayAbs(pm.ax, pm.ay);
+    if (!r.ok) {
+      Util.setStatus(r.reason || "Rejected");
+      Util.setPendingMove(null);
+      return;
+    }
+    Util.setPendingMove(null);
+    Util.setTurnUI();
+    Util.setStatus(r.captured ? `Captured ${r.captured}` : "Placed");
+    Render.requestRender();
+    return;
+  }
+
+  // Net mode
+  if (Engine.isNetBusy && Engine.isNetBusy()) return;
+
+  Engine._setNetBusy(true);
+  Util.setStatus("Sending…");
+  Render.requestRender();
+
+  try {
+    const rr = await Net.requestAction({
+      type: "play",
+      ax: pm.ax,
+      ay: pm.ay,
+      bx: pm.bx,
+      by: pm.by,
+    });
+    if (!rr.ok) {
+      Util.setStatus(rr.reason || "Rejected");
+    } else {
+      Util.setStatus("Placed");
+    }
+  } finally {
+    Engine._setNetBusy(false);
+    Util.setPendingMove(null);
+    Util.setTurnUI();
+    Render.requestRender();
+  }
 });
 
 if (finalizeBtn) finalizeBtn.addEventListener("click", async () => {
