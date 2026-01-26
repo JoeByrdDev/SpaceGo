@@ -117,6 +117,22 @@ Render.drawGridAbs = function (leftA, rightA, topA, bottomA) {
   ctx.stroke();
 };
 
+Render.drawLastMovePlus = function(px, py, r, stoneV) {
+  const pr = r * 0.35;       // plus half-length
+  const lw = Math.max(1, Math.round(r * 0.18));
+
+  ctx.strokeStyle = (stoneV === 1) ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.75)';
+  ctx.lineWidth = lw;
+  ctx.lineCap = 'round';
+
+  ctx.beginPath();
+  ctx.moveTo(px - pr, py);
+  ctx.lineTo(px + pr, py);
+  ctx.moveTo(px, py - pr);
+  ctx.lineTo(px, py + pr);
+  ctx.stroke();
+};
+
 Render.drawStonesAbs = function(leftA, rightA, topA, bottomA) {
   const x0 = Math.floor(leftA);
   const x1 = Math.ceil(rightA);
@@ -171,6 +187,11 @@ Render.drawStonesAbs = function(leftA, rightA, topA, bottomA) {
       ctx.strokeStyle = v === 1 ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.12)';
       ctx.lineWidth = 1;
       ctx.stroke();
+	  
+	  const lm = window.lastMove;
+      if (lm && lm.bx === c.bx && lm.by === c.by) {
+        Render.drawLastMovePlus(p.x, p.y, r, v);
+      }
 
       ctx.restore();
 

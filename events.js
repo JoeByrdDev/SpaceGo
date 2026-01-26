@@ -213,6 +213,25 @@ Events.onPointerUp = function (e) {
       Render.requestRender();
       return;
     }
+	
+	    // Preview-mode convenience: if a pending move exists, clicking the ghost OR any occupied stone clears it.
+    const prevOn = Util.getPreviewMode && Util.getPreviewMode();
+    if (prevOn) {
+      const pm = Util.getPendingMove && Util.getPendingMove();
+      if (pm) {
+        const v = (board && board[near.by]) ? board[near.by][near.bx] : 0;
+        const sameGhost = (pm.ax === near.ax && pm.ay === near.ay);
+        const occupied = (v && v !== 0);
+
+        if (sameGhost || occupied) {
+          Util.setPendingMove(null);
+          Util.setStatus('Cancelled');
+          Render.requestRender();
+          return;
+        }
+      }
+    }
+
 
 
     // Turn gate (insecure on purpose for now): only the selected side can move on its turn.
@@ -234,7 +253,6 @@ Events.onPointerUp = function (e) {
       return;
     }
 	
-	const prevOn = Util.getPreviewMode && Util.getPreviewMode();
     if (prevOn) {
       const pm = Util.getPendingMove && Util.getPendingMove();
 

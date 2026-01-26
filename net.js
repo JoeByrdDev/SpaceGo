@@ -96,6 +96,7 @@ Net.applyState = function (state) {
   }
   
   window.phase = state.phase;
+  window.lastMove = state.lastMove || null;
   window.deadSet = state.deadSet || [];
   window.scoreResult = state.scoreResult || null;
   window.score = state.score || null;
