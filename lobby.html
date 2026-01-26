@@ -1,3 +1,4 @@
+<!-- lobby.html (replace file content with this) -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -6,18 +7,21 @@
   <title>SpaceGo — Lobby</title>
   <style>
     html, body { height:100%; margin:0; background:#0b0d10; color:#e9eef5; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-    .wrap { min-height:100%; display:flex; align-items:center; justify-content:center; padding:24px; box-sizing:border-box; }
+    .wrap { min-height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px; box-sizing:border-box; gap:12px; }
     .card { width: min(920px, 100%); border:1px solid #202733; background:#0f1318; border-radius:16px; padding:16px; box-sizing:border-box; }
     h1 { font-size:18px; margin:0 0 8px; font-weight:650; }
     h2 { font-size:13px; margin:14px 0 8px; font-weight:650; opacity:0.95; }
     .muted { opacity:0.8; font-size:12px; }
-    input, select, button {
+    input, select, button, a.btn {
       background:#0b0d10; color:#e9eef5;
       border:1px solid #2a3443; border-radius:10px;
       padding:10px 12px; font-size:14px;
+      text-decoration:none;
+      display:inline-flex; align-items:center; justify-content:center;
+      box-sizing:border-box;
     }
-    button { background:#1a2230; cursor:pointer; }
-    button:hover { background:#222c3d; }
+    button, a.btn { background:#1a2230; cursor:pointer; }
+    button:hover, a.btn:hover { background:#222c3d; }
     .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin:10px 0; }
     .spacer { flex:1; }
     .status { font-size:12px; opacity:0.85; }
@@ -47,7 +51,7 @@
     .listHeader .colWhen { flex: 0 0 140px; text-align:right; }
 
     #create.isDisabled { opacity: 0.55; }
-	
+
     .gameRow {
       display:flex;
       gap:10px;
@@ -96,34 +100,72 @@
       opacity: 0.75;
       font-size: 12px;
     }
+	
+	.siteTitle{
+  font-size:26px;
+  font-weight:750;
+  letter-spacing:0.2px;
+  line-height:1;
+  color:#e9eef5;
+  user-select:none;
+  white-space:nowrap;
+}
+@media (max-width:700px){
+  .siteTitle{ font-size:20px; }
+}
+
+    .footerBar {
+      width: min(920px, 100%);
+      border: 1px solid #202733;
+      background: #0f1318;
+      border-radius: 16px;
+      padding: 10px 12px;
+      box-sizing: border-box;
+      display:flex;
+      align-items:center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .footerBar .left { display:flex; gap:10px; align-items:center; min-width:0; }
+    .footerBar .right { display:flex; gap:10px; align-items:center; }
+    .footerHint { opacity: 0.7; font-size: 12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
     @media (max-width: 700px) {
-  .wrap { padding: 12px; }
+      .wrap { padding: 12px; }
 
-  /* Only show: name + updated */
-  .listHeader .colMoves,
-  .listHeader .colPhase { display: none; }
+      /* Only show: name + updated */
+      .listHeader .colMoves,
+      .listHeader .colPhase { display: none; }
 
-  .gameRow .colMoves,
-  .gameRow .colPhase { display: none; }
+      .gameRow .colMoves,
+      .gameRow .colPhase { display: none; }
 
-  /* Keep it a clean two-column row */
-  .gameRow { flex-wrap: nowrap; gap: 10px; }
-  .gameRow > div { min-width: 0; }
+      .gameRow { flex-wrap: nowrap; gap: 10px; }
+      .gameRow > div { min-width: 0; }
 
-  .gameRow .colWhen {
-    flex: 0 0 140px;
-    text-align: right;
-  }
+      .gameRow .colWhen {
+        flex: 0 0 140px;
+        text-align: right;
+      }
 
-  /* Optional: if the header is too cramped, hide it */
-  /* .listHeader { display:none; } */
-}
+      .footerBar { border-radius: 14px; }
+      .footerHint { display:none; }
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
+    <div class="footerBar">
+      <div class="left">
+        <div class="siteTitle">SpaceGo</div>
+      </div>
+      <div class="right">
+        <a class="btn" href="/about">About</a>
+        <a class="btn" href="/donate">Support</a>
+      </div>
+    </div>
     <div class="card">
+	
 
       <div style="border:1px solid #333; padding:10px; margin:10px 0;">
         <div>
@@ -199,11 +241,13 @@
           <button id="create">Create</button>
         </span>
       </div>
-	  <div id="createWarn" style="display:none; margin-top:6px; font-size:12px; color:#b00020;">
-  You must enter a game name and a game size
-</div>
-	  
+      <div id="createWarn" style="display:none; margin-top:6px; font-size:12px; color:#b00020;">
+        You must enter a game name and a game size
+      </div>
+
     </div>
+
+    
   </div>
 
 <script>
@@ -407,86 +451,82 @@
     pageCursor = pageCursor + pageLimit;
     refresh();
   });
-  
+
   const elName = document.getElementById('name');
-const elSize = document.getElementById('size');
-const btnCreate = document.getElementById('create');
-const elCreateWarn = document.getElementById('createWarn');
+  const elSize = document.getElementById('size');
+  const btnCreate = document.getElementById('create');
+  const elCreateWarn = document.getElementById('createWarn');
 
-function showCreateWarn(show) {
-  if (!elCreateWarn) return;
-  elCreateWarn.style.display = show ? 'block' : 'none';
-}
-
-function computeCreateInputs() {
-  const name = (elName.value || '').trim();
-  const sizeRaw = elSize.value;
-
-  const nameOk = name.length > 0;
-  const sizeOk = !!sizeRaw;
-
-  const N = sizeOk ? clampInt(sizeRaw, 5, 30, 13) : null;
-
-  btnCreate.classList.toggle('isDisabled', !(nameOk && sizeOk));
-  btnCreate.setAttribute('aria-disabled', (nameOk && sizeOk) ? 'false' : 'true');
-  
-  if (nameOk && sizeOk) showCreateWarn(false);
-  
-  return { name, N, nameOk, sizeOk };
-}
-
-elName.addEventListener('input', computeCreateInputs);
-elSize.addEventListener('change', computeCreateInputs);
-
-
- document.getElementById('create').addEventListener('click', async () => {
-  const { name, N, nameOk, sizeOk } = computeCreateInputs();
-
-  if (!nameOk || !sizeOk) {
-    showCreateWarn(true);
-    if (!nameOk) { setStatus('Enter a game name', 'danger'); elName.focus(); }
-    else { setStatus('Select a board size', 'danger'); elSize.focus(); }
-    return;
+  function showCreateWarn(show) {
+    if (!elCreateWarn) return;
+    elCreateWarn.style.display = show ? 'block' : 'none';
   }
 
-  showCreateWarn(false);
+  function computeCreateInputs() {
+    const name = (elName.value || '').trim();
+    const sizeRaw = elSize.value;
 
-  setStatus('Creating…');
-  try {
-    const out = await apiPost('/api/game/new', { N, name });
-    if (!out || !out.gameId) throw new Error('Bad response');
-    setStatus('Created', 'ok');
-    goGame(out.gameId);
-  } catch (e) {
-    setStatus(e.message || 'Failed', 'danger');
+    const nameOk = name.length > 0;
+    const sizeOk = !!sizeRaw;
+
+    const N = sizeOk ? clampInt(sizeRaw, 5, 30, 13) : null;
+
+    btnCreate.classList.toggle('isDisabled', !(nameOk && sizeOk));
+    btnCreate.setAttribute('aria-disabled', (nameOk && sizeOk) ? 'false' : 'true');
+
+    if (nameOk && sizeOk) showCreateWarn(false);
+
+    return { name, N, nameOk, sizeOk };
   }
-});
 
+  elName.addEventListener('input', computeCreateInputs);
+  elSize.addEventListener('change', computeCreateInputs);
 
+  document.getElementById('create').addEventListener('click', async () => {
+    const { name, N, nameOk, sizeOk } = computeCreateInputs();
+
+    if (!nameOk || !sizeOk) {
+      showCreateWarn(true);
+      if (!nameOk) { setStatus('Enter a game name', 'danger'); elName.focus(); }
+      else { setStatus('Select a board size', 'danger'); elSize.focus(); }
+      return;
+    }
+
+    showCreateWarn(false);
+
+    setStatus('Creating…');
+    try {
+      const out = await apiPost('/api/game/new', { N, name });
+      if (!out || !out.gameId) throw new Error('Bad response');
+      setStatus('Created', 'ok');
+      goGame(out.gameId);
+    } catch (e) {
+      setStatus(e.message || 'Failed', 'danger');
+    }
+  });
 
   (function initBoardSizeSelect() {
-  const sel = document.getElementById('size');
-  if (!sel || sel.tagName !== 'SELECT') return;
+    const sel = document.getElementById('size');
+    if (!sel || sel.tagName !== 'SELECT') return;
 
-  sel.innerHTML = '';
+    sel.innerHTML = '';
 
-  const ph = document.createElement('option');
-  ph.value = '';
-  ph.textContent = 'Select size…';
-  ph.disabled = true;
-  ph.selected = true;
-  sel.appendChild(ph);
+    const ph = document.createElement('option');
+    ph.value = '';
+    ph.textContent = 'Select size…';
+    ph.disabled = true;
+    ph.selected = true;
+    sel.appendChild(ph);
 
-  for (let n = 5; n <= 30; n++) {
-    const opt = document.createElement('option');
-    opt.value = String(n);
-    opt.textContent = String(n);
-    sel.appendChild(opt);
-  }
-})();
+    for (let n = 5; n <= 30; n++) {
+      const opt = document.createElement('option');
+      opt.value = String(n);
+      opt.textContent = String(n);
+      sel.appendChild(opt);
+    }
+  })();
 
   computeCreateInputs();
-
   refresh();
 </script>
 </body>

@@ -1,0 +1,103 @@
+<!-- donate.html (new file) -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SpaceGo — Support</title>
+  <style>
+    html, body { height:100%; margin:0; background:#0b0d10; color:#e9eef5; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    .wrap { min-height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px; box-sizing:border-box; gap:12px; }
+    .card { width: min(920px, 100%); border:1px solid #202733; background:#0f1318; border-radius:16px; padding:16px; box-sizing:border-box; }
+    h1 { font-size:18px; margin:0 0 8px; font-weight:650; }
+    h2 { font-size:13px; margin:14px 0 8px; font-weight:650; opacity:0.95; }
+    p { margin: 0 0 10px; opacity: 0.92; line-height: 1.45; }
+    .muted { opacity:0.8; font-size:12px; }
+    a.btn, button.btn {
+      background:#1a2230; color:#e9eef5;
+      border:1px solid #2a3443; border-radius:10px;
+      padding:10px 12px; font-size:14px;
+      text-decoration:none;
+      display:inline-flex; align-items:center; justify-content:center;
+      box-sizing:border-box;
+      cursor:pointer;
+    }
+    a.btn:hover, button.btn:hover { background:#222c3d; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin:10px 0; }
+    .spacer { flex:1; }
+
+    .footerBar {
+      width: min(920px, 100%);
+      border: 1px solid #202733;
+      background: #0f1318;
+      border-radius: 16px;
+      padding: 10px 12px;
+      box-sizing: border-box;
+      display:flex;
+      align-items:center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .footerBar .left { display:flex; gap:10px; align-items:center; min-width:0; }
+    .footerBar .right { display:flex; gap:10px; align-items:center; }
+    .footerHint { opacity: 0.7; font-size: 12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+	.siteTitle{
+  font-size:26px;
+  font-weight:750;
+  letter-spacing:0.2px;
+  line-height:1;
+  color:#e9eef5;
+  user-select:none;
+  white-space:nowrap;
+}
+@media (max-width:700px){
+  .siteTitle{ font-size:20px; }
+}
+    .callout {
+      border: 1px solid #202733;
+      background: #0b0d10;
+      border-radius: 14px;
+      padding: 12px;
+      margin-top: 10px;
+    }
+
+    @media (max-width: 700px) {
+      .wrap { padding: 12px; }
+      .footerBar { border-radius: 14px; }
+      .footerHint { display:none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+  <div class="footerBar">
+      <div class="left">
+        <div class="siteTitle">SpaceGo</div>
+      </div>
+      <div class="right">
+        <a class="btn" href="/about">About</a>
+        <a class="btn" href="/donate" aria-current="page" style="opacity:0.85;">Support</a>
+      </div>
+    </div>
+    <div class="card">
+      
+
+      <h1>Support</h1>
+
+      <h2>Why donate?</h2>
+      <p>If you appreciate SpaceGo and/or want to request specific features, feel free to donate. Servers cost money :)</p>
+
+      <div class="callout">
+        <h2 style="margin-top:0;">Donation options</h2>
+        <a href="https://ko-fi.com/joebyrd" target="_blank" rel="noopener noreferrer">My Ko-fi</a>
+      </div>
+	  
+	  <div class="row" style="margin-top:0;">
+        <a class="btn" href="/">← Lobby</a>
+        <div class="spacer"></div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

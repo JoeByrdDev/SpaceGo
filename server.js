@@ -191,6 +191,17 @@ app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "lobby.html"));
 });
 
+app.get("/about", (req, res) => {
+  res.sendFile(path.join(__dirname, "about.html"));
+});
+app.get("/donate", (req, res) => {
+  res.sendFile(path.join(__dirname, "donate.html"));
+});
+// optional nice alias
+app.get("/support", (req, res) => {
+  res.redirect(302, "/donate");
+});
+
 // serve the actual game page at /game.html (backed by index.html)
 app.get("/game.html", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
