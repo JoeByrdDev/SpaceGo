@@ -39,31 +39,34 @@
       font-size: 12px;
       opacity: 0.85;
       user-select:none;
+      align-items: center;
     }
     .listHeader > div { flex: 1; }
-    .listHeader .colId { flex: 0 0 88px; }
-    .listHeader .colN { flex: 0 0 56px; }
     .listHeader .colMoves { flex: 0 0 84px; }
     .listHeader .colPhase { flex: 0 0 82px; }
     .listHeader .colWhen { flex: 0 0 140px; text-align:right; }
 
+    #create.isDisabled { opacity: 0.55; }
+	
     .gameRow {
       display:flex;
       gap:10px;
       padding:12px;
       border-bottom: 1px solid #141a22;
       cursor: pointer;
+      align-items: center;
+      min-width: 0;
     }
     .gameRow:last-child { border-bottom:none; }
     .gameRow:hover { background:#0f1318; }
-    .gameRow > div { flex: 1; }
-    .gameRow .colId { flex: 0 0 88px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; opacity: 0.9; }
-    .gameRow .colN { flex: 0 0 56px; opacity: 0.9; }
+    .gameRow > div { flex: 1; min-width: 0; }
+
     .gameRow .colMoves { flex: 0 0 84px; opacity: 0.9; }
     .gameRow .colPhase { flex: 0 0 82px; opacity: 0.9; text-transform: lowercase; }
     .gameRow .colWhen { flex: 0 0 140px; text-align:right; opacity: 0.75; font-size: 12px; }
-    .nameCell { font-weight: 650; display:flex; align-items:center; gap:8px; }
-    .subCell { font-size: 12px; opacity: 0.75; margin-top: 2px; }
+
+    .nameCell { font-weight: 650; display:flex; align-items:center; gap:8px; min-width: 0; }
+    .nameCell > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     .tag {
       display:inline-flex;
@@ -75,6 +78,7 @@
       font-size: 11px;
       opacity: 0.95;
       white-space: nowrap;
+      flex: 0 0 auto;
     }
     .tag.turn { border-color: #3c5a7a; }
     .tag.seat { border-color: #2f4b38; }
@@ -82,16 +86,39 @@
     .gameRow.yourTurn:hover { background: #122035; }
 
     .createRow { flex-wrap: wrap; }
-.createRow .nameLabel { flex: 0 0 auto; }
-.createRow #name { flex: 1 1 260px; min-width: 220px; }
-.createRow .bsGroup { display:inline-flex; align-items:center; gap:10px; white-space: nowrap; flex: 0 0 auto; }
-.createRow #create { flex: 0 0 auto; }
+    .createRow .nameLabel { flex: 0 0 auto; }
+    .createRow #name { flex: 1 1 260px; min-width: 220px; }
+    .createRow .bsGroup { display:inline-flex; align-items:center; gap:10px; white-space: nowrap; flex: 0 0 auto; }
+    .createRow #create { flex: 0 0 auto; }
 
     .emptyRow {
       padding: 12px;
       opacity: 0.75;
       font-size: 12px;
     }
+
+    @media (max-width: 700px) {
+  .wrap { padding: 12px; }
+
+  /* Only show: name + updated */
+  .listHeader .colMoves,
+  .listHeader .colPhase { display: none; }
+
+  .gameRow .colMoves,
+  .gameRow .colPhase { display: none; }
+
+  /* Keep it a clean two-column row */
+  .gameRow { flex-wrap: nowrap; gap: 10px; }
+  .gameRow > div { min-width: 0; }
+
+  .gameRow .colWhen {
+    flex: 0 0 140px;
+    text-align: right;
+  }
+
+  /* Optional: if the header is too cramped, hide it */
+  /* .listHeader { display:none; } */
+}
   </style>
 </head>
 <body>
@@ -132,17 +159,12 @@
         <div class="spacer"></div>
         <div class="status" id="status"></div>
       </div>
-	  
-	  
-
 
       <h2>Your seated games</h2>
       <div class="muted" id="myHint" style="margin-top:-2px;"></div>
       <div class="list" id="myList">
         <div class="listHeader">
-          <div class="colId">id</div>
           <div>name</div>
-          <div class="colN">N</div>
           <div class="colMoves">moves</div>
           <div class="colPhase">phase</div>
           <div class="colWhen">updated</div>
@@ -153,40 +175,34 @@
       <h2 style="margin-top:16px;">All games</h2>
       <div class="list" id="list">
         <div class="listHeader">
-          <div class="colId">id</div>
           <div>name</div>
-          <div class="colN">N</div>
           <div class="colMoves">moves</div>
           <div class="colPhase">phase</div>
           <div class="colWhen">updated</div>
         </div>
         <div id="gameList"></div>
       </div>
-	  
-	  <div class="row" style="margin-top:10px;">
+
+      <div class="row" style="margin-top:10px;">
         <button id="prevPage">Prev</button>
         <button id="nextPage">Next</button>
         <div class="spacer"></div>
         <div class="status" id="pageInfo"></div>
       </div>
 
-      <div class="row" style="margin-top:14px;">
-        <div class="muted">Create new:</div>
+      <div class="row createRow" style="margin-top:14px;">
+        <div class="muted nameLabel">Create new:</div>
         <input id="name" type="text" placeholder="game name" style="width: 260px" />
         <span class="bsGroup">
-    <span class="muted">Board Size:</span>
-    <select id="size" style="width: 120px"></select>
-    <button id="create">Create</button>
-  </span>
+          <span class="muted">Board Size:</span>
+          <select id="size" style="width: 120px"></select>
+          <button id="create">Create</button>
+        </span>
       </div>
-
-      <div class="row">
-        <div class="muted">Open by id:</div>
-        <input id="joinId" type="text" placeholder="gameId" style="width:220px" />
-        <button id="join">Open</button>
-      </div>
-
-      <div class="muted">Opens the game page at <code>/game.html?gameId=...</code>.</div>
+	  <div id="createWarn" style="display:none; margin-top:6px; font-size:12px; color:#b00020;">
+  You must enter a game name and a game size
+</div>
+	  
     </div>
   </div>
 
@@ -202,7 +218,6 @@
 
   let pageCursor = 0;
   const pageLimit = 50;
-  let lastTotal = 0;
 
   function setStatus(msg, kind) {
     elStatus.textContent = msg || '';
@@ -278,14 +293,7 @@
     if (g.yourTurn) row.classList.add('yourTurn');
     row.addEventListener('click', () => goGame(g.gameId));
 
-    const shortId = (g.gameId || '').slice(0, 8);
-
-    const cId = document.createElement('div');
-    cId.className = 'colId';
-    cId.textContent = shortId;
-
     const cName = document.createElement('div');
-
     const nameTop = document.createElement('div');
     nameTop.className = 'nameCell';
 
@@ -307,16 +315,7 @@
       nameTop.appendChild(t2);
     }
 
-    const nameSub = document.createElement('div');
-    nameSub.className = 'subCell';
-    nameSub.textContent = `rev ${g.rev ?? 0} • ${g.gameId || ''}`;
-
     cName.appendChild(nameTop);
-    cName.appendChild(nameSub);
-
-    const cN = document.createElement('div');
-    cN.className = 'colN';
-    cN.textContent = 'N' + (g.N ?? '');
 
     const cMoves = document.createElement('div');
     cMoves.className = 'colMoves';
@@ -330,9 +329,7 @@
     cWhen.className = 'colWhen';
     cWhen.textContent = ago(g.updatedAt);
 
-    row.appendChild(cId);
     row.appendChild(cName);
-    row.appendChild(cN);
     row.appendChild(cMoves);
     row.appendChild(cPhase);
     row.appendChild(cWhen);
@@ -371,34 +368,32 @@
     for (const g of mine) addRow(g, elMyList);
   }
 
-async function refresh() {
-  setStatus('Loading…');
-  try {
-    const who = await apiGet('/api/whoami');
+  async function refresh() {
+    setStatus('Loading…');
+    try {
+      const who = await apiGet('/api/whoami');
 
-    const mineResp = await apiGet(`/api/games?scope=mine&limit=200`);
-    const allResp = await apiGet(`/api/games?scope=all&cursor=${pageCursor}&limit=${pageLimit}`);
+      const mineResp = await apiGet(`/api/games?scope=mine&limit=200`);
+      const allResp = await apiGet(`/api/games?scope=all&cursor=${pageCursor}&limit=${pageLimit}`);
 
-    fillMine(mineResp.games || [], !!who.authed);
-    fillAll(allResp.games || []);
+      fillMine(mineResp.games || [], !!who.authed);
+      fillAll(allResp.games || []);
 
-    const total = allResp.total || 0;
-    const start = total ? (allResp.cursor + 1) : 0;
-    const end = allResp.cursor + (allResp.games ? allResp.games.length : 0);
+      const total = allResp.total || 0;
+      const start = total ? (allResp.cursor + 1) : 0;
+      const end = allResp.cursor + (allResp.games ? allResp.games.length : 0);
 
-    elPageInfo.textContent = total ? `Showing ${start}-${end} of ${total}` : '';
-    btnPrev.disabled = (allResp.cursor || 0) <= 0;
-    btnNext.disabled = !allResp.hasMore;
+      elPageInfo.textContent = total ? `Showing ${start}-${end} of ${total}` : '';
+      btnPrev.disabled = (allResp.cursor || 0) <= 0;
+      btnNext.disabled = !allResp.hasMore;
 
-    setStatus((allResp.games || []).length ? `Loaded ${end} / ${total}` : 'No games yet', (allResp.games || []).length ? 'ok' : '');
-  } catch (e) {
-    setStatus(e.message || 'Failed', 'danger');
+      setStatus((allResp.games || []).length ? `Loaded ${end} / ${total}` : 'No games yet', (allResp.games || []).length ? 'ok' : '');
+    } catch (e) {
+      setStatus(e.message || 'Failed', 'danger');
+    }
   }
-}
 
-
-
-    document.getElementById('refresh').addEventListener('click', () => {
+  document.getElementById('refresh').addEventListener('click', () => {
     pageCursor = 0;
     refresh();
   });
@@ -412,48 +407,85 @@ async function refresh() {
     pageCursor = pageCursor + pageLimit;
     refresh();
   });
-
-  document.getElementById('create').addEventListener('click', async () => {
-    const N = clampInt(document.getElementById('size').value, 5, 49, 19);
-    const name = (document.getElementById('name').value || '').trim();
-
-    setStatus('Creating…');
-    try {
-      const out = await apiPost('/api/game/new', { N, name });
-      if (!out || !out.gameId) throw new Error('Bad response');
-      setStatus('Created', 'ok');
-      goGame(out.gameId);
-    } catch (e) {
-      setStatus(e.message || 'Failed', 'danger');
-    }
-  });
-
-  document.getElementById('join').addEventListener('click', async () => {
-    const id = (document.getElementById('joinId').value || '').trim();
-    if (!id) return;
-
-    setStatus('Checking…');
-    try {
-      await apiGet(`/api/game/${encodeURIComponent(id)}`);
-      setStatus('Opening', 'ok');
-      goGame(id);
-    } catch (e) {
-      setStatus(e.message || 'Not found', 'danger');
-    }
-  });
   
+  const elName = document.getElementById('name');
+const elSize = document.getElementById('size');
+const btnCreate = document.getElementById('create');
+const elCreateWarn = document.getElementById('createWarn');
+
+function showCreateWarn(show) {
+  if (!elCreateWarn) return;
+  elCreateWarn.style.display = show ? 'block' : 'none';
+}
+
+function computeCreateInputs() {
+  const name = (elName.value || '').trim();
+  const sizeRaw = elSize.value;
+
+  const nameOk = name.length > 0;
+  const sizeOk = !!sizeRaw;
+
+  const N = sizeOk ? clampInt(sizeRaw, 5, 30, 13) : null;
+
+  btnCreate.classList.toggle('isDisabled', !(nameOk && sizeOk));
+  btnCreate.setAttribute('aria-disabled', (nameOk && sizeOk) ? 'false' : 'true');
+  
+  if (nameOk && sizeOk) showCreateWarn(false);
+  
+  return { name, N, nameOk, sizeOk };
+}
+
+elName.addEventListener('input', computeCreateInputs);
+elSize.addEventListener('change', computeCreateInputs);
+
+
+ document.getElementById('create').addEventListener('click', async () => {
+  const { name, N, nameOk, sizeOk } = computeCreateInputs();
+
+  if (!nameOk || !sizeOk) {
+    showCreateWarn(true);
+    if (!nameOk) { setStatus('Enter a game name', 'danger'); elName.focus(); }
+    else { setStatus('Select a board size', 'danger'); elSize.focus(); }
+    return;
+  }
+
+  showCreateWarn(false);
+
+  setStatus('Creating…');
+  try {
+    const out = await apiPost('/api/game/new', { N, name });
+    if (!out || !out.gameId) throw new Error('Bad response');
+    setStatus('Created', 'ok');
+    goGame(out.gameId);
+  } catch (e) {
+    setStatus(e.message || 'Failed', 'danger');
+  }
+});
+
+
+
   (function initBoardSizeSelect() {
-    const sel = document.getElementById('size');
-    if (!sel || sel.tagName !== 'SELECT') return;
-    sel.innerHTML = '';
-    for (let n = 5; n <= 49; n++) {
-      const opt = document.createElement('option');
-      opt.value = String(n);
-      opt.textContent = String(n);
-      if (n === 19) opt.selected = true;
-      sel.appendChild(opt);
-    }
-  })();
+  const sel = document.getElementById('size');
+  if (!sel || sel.tagName !== 'SELECT') return;
+
+  sel.innerHTML = '';
+
+  const ph = document.createElement('option');
+  ph.value = '';
+  ph.textContent = 'Select size…';
+  ph.disabled = true;
+  ph.selected = true;
+  sel.appendChild(ph);
+
+  for (let n = 5; n <= 30; n++) {
+    const opt = document.createElement('option');
+    opt.value = String(n);
+    opt.textContent = String(n);
+    sel.appendChild(opt);
+  }
+})();
+
+  computeCreateInputs();
 
   refresh();
 </script>

@@ -589,6 +589,7 @@ function createGame(N = 19, name = "") {
     toMove: 1,
     phase: "play",
     passStreak: 0,
+	lastMove: null,
 
     deadSet: [],
     scoreResult: null,
@@ -623,6 +624,7 @@ function gamePublicState(g, actor = null) {
     toMove: g.toMove,
     phase: g.phase,
     passStreak: g.passStreak,
+	lastMove: g.lastMove || null,
     deadSet: g.deadSet || [],
     scoreResult: g.scoreResult,
     rev: g.rev,
@@ -702,6 +704,7 @@ function tryPlay(g, ax, ay) {
   const opp = other(me);
 
   b[y][x] = me;
+  
 
   let captured = 0;
   const checked = new Set();
@@ -726,6 +729,7 @@ function tryPlay(g, ax, ay) {
   const nextHash = hashPosition({ board: b, toMove: nextToMove });
   if (seenHas(g, nextHash)) return { ok: false, reason: "Superko" };
 
+  g.lastMove = { bx: x, by: y };
   g.board = b;
   g.toMove = nextToMove;
   g.passStreak = 0;
@@ -743,6 +747,7 @@ function doPass(g) {
 
   g.toMove = other(g.toMove);
   g.passStreak += 1;
+  g.lastMove = null;
 
   if (g.passStreak >= 2) {
     g.phase = "scoring";
@@ -762,6 +767,7 @@ function doReset(g, N) {
   g.toMove = 1;
   g.phase = "play";
   g.passStreak = 0;
+  g.lastMove = null;
   g.deadSet = [];
   g.scoreResult = null;
   g.seen = [hashPosition(g)];
@@ -1100,6 +1106,8 @@ app.post(
       await rdb.unwatch();
       return res.status(404).json({ ok: false, error: "Game not found" });
     }
+	
+	if (!Number.isInteger(g.rev)) g.rev = 0;
 
     if (!Number.isInteger(rev) || rev !== g.rev) {
       await rdb.unwatch();

@@ -155,6 +155,7 @@ Engine.simulatePlayBase = function (x, y, state) {
       seen: Array.from(seen),
       phase: 'play',
       passStreak: 0,
+	  lastMove: { bx: x, by: y },
     },
   };
 };
@@ -163,6 +164,7 @@ Engine.simulatePlayBase = function (x, y, state) {
 Engine.applyStateLocal = function (next) {
   if (next.N && next.N !== N) Util.setBoardSize(next.N);
   board = next.board;
+  window.lastMove = next.lastMove || null;
   Util.setToMove(next.toMove);
   Util.seen = new Set(next.seen || []);
   phase = next.phase || 'play';
@@ -298,6 +300,7 @@ Engine.pass = function() {
   if (phase !== 'play') return;
 
   toMove = Util.other(toMove);
+  window.lastMove = null;
   Util.seen.add(Util.hashPosition(toMove));
   Util.setTurnUI();
 
@@ -323,6 +326,7 @@ Engine.reset = function(n = N) {
   phase = 'play';
   passStreak = 0;
   deadSet.clear();
+  window.lastMove = null;
   scoreResult = null;
 
   Util.setTurnUI();

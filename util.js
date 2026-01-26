@@ -229,18 +229,26 @@ let pendingMove = null; // { ax, ay, bx, by } or null
 
 Util.getPendingMove = () => pendingMove;
 
-Util.setPendingMove = function (m) {
+// raw setter: NO setScoringUI call (prevents recursion)
+Util._setPendingMoveRaw = function (m) {
   pendingMove = m || null;
 
   // keep the ghost visible even without hover on touch
+  window.mouse = window.mouse || {};
   if (pendingMove) {
-    window.mouse = window.mouse || {};
     window.mouse.over = { ax: pendingMove.ax, ay: pendingMove.ay, bx: pendingMove.bx, by: pendingMove.by };
+  } else {
+    if (window.mouse.over) delete window.mouse.over;
   }
 
   Util._syncGlobals();
-  Util.setScoringUI?.();
   Render.requestRender?.();
+};
+
+// normal setter: updates UI too
+Util.setPendingMove = function (m) {
+  Util._setPendingMoveRaw(m);
+  Util.setScoringUI?.();
 };
 
 const previewBtn = document.getElementById('previewBtn');
@@ -294,7 +302,7 @@ Util.setScoringUI = function () {
     acceptBtn.style.display = "";
     acceptBtn.disabled = true;
     acceptBtn.textContent = hasDraft ? "Finalized" : "Finished";
-    Util.setPendingMove(null);
+    Util._setPendingMoveRaw(null);
     return;
   }
 
@@ -313,7 +321,7 @@ Util.setScoringUI = function () {
 
     acceptBtn.disabled = !hasDraft;
     acceptBtn.textContent = youAccepted ? "Accepted (waiting…)" : "Accept Scoring";
-    Util.setPendingMove(null);
+    Util._setPendingMoveRaw(null);
     return;
   }
 
@@ -328,7 +336,7 @@ Util.setScoringUI = function () {
     scoreBtn.disabled = !Util.getPendingMove();
   } else {
     scoreBtn.style.display = "none";
-    if (Util.getPendingMove && Util.getPendingMove()) Util.setPendingMove(null);
+    if (Util.getPendingMove && Util.getPendingMove()) Util._setPendingMoveRaw(null);
   }
 };
 
