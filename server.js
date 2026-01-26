@@ -16,7 +16,6 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 8080;
 
-
 app.use(express.json());
 app.use(cookieParser());
 
@@ -24,7 +23,6 @@ app.set("trust proxy", 1);
 
 const SESSION_COOKIE_NAME = "sg_session";
 const SESSION_EXPIRES_MS = 1000 * 60 * 60 * 24 * 7; // 7 days (Firebase session cookies support up to 14 days)
-
 
 const PROJECT_ID =
   process.env.FIREBASE_PROJECT_ID ||
@@ -37,7 +35,6 @@ admin.initializeApp({
   ...(PROJECT_ID ? { projectId: PROJECT_ID } : {}),
 });
 
-
 const REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
 const rdb = createClient({ url: REDIS_URL });
 
@@ -45,32 +42,25 @@ rdb.on("error", (err) => console.error("redis error", err));
 
 await rdb.connect(); // node ESM top-level await is fine
 
-// rateLimit.js (or inline in server.js)
-
 const NOW = () => Math.floor(Date.now() / 1000);
 
-export function rateLimit({
-  capacity,
-  refillPerSec,
-  keyFn
-}) {
+export function rateLimit({ capacity, refillPerSec, keyFn }) {
   return async (req, res, next) => {
     const keyId = keyFn(req);
     const key = `rl:${keyId}`;
     const now = NOW();
 
-    // Lua-free version (fast enough at your scale)
     const data = await rdb.hGetAll(key);
 
     let tokens = data.tokens ? Number(data.tokens) : capacity;
     let lastTs = data.ts ? Number(data.ts) : now;
-	
-	if (!Number.isFinite(tokens)) tokens = capacity;
-	if (!Number.isFinite(lastTs)) lastTs = now;
+
+    if (!Number.isFinite(tokens)) tokens = capacity;
+    if (!Number.isFinite(lastTs)) lastTs = now;
 
     const delta = Math.max(0, now - lastTs);
     tokens = Math.min(capacity, tokens + delta * refillPerSec);
-	if (!Number.isFinite(tokens)) tokens = capacity;
+    if (!Number.isFinite(tokens)) tokens = capacity;
 
     if (tokens < 1) {
       res.status(429).json({ error: "rate_limited" });
@@ -79,21 +69,14 @@ export function rateLimit({
 
     tokens -= 1;
 
-    await rdb.hSet(key, {
-      tokens: tokens.toString(),
-      ts: now.toString()
-    });
-
-    // expire idle buckets
+    await rdb.hSet(key, { tokens: tokens.toString(), ts: now.toString() });
     await rdb.expire(key, Math.ceil(capacity / refillPerSec) + 10);
 
     next();
   };
 }
 
-
 // For local HTTP dev, Secure cookies won't set.
-// Either run local HTTPS, or allow insecure cookies only on localhost.
 function isHttps(req) {
   return (
     req.secure ||
@@ -113,8 +96,6 @@ function sessionCookieOptions(req) {
   };
 }
 
-// Basic CSRF guard for cookie-authenticated POST/PUT/DELETE.
-// Works well when frontend + API are same-origin.
 function requireSameOrigin(req, res, next) {
   const origin = req.headers.origin;
   if (!origin) return next();
@@ -122,7 +103,6 @@ function requireSameOrigin(req, res, next) {
   if (origin !== expected) return res.status(403).json({ error: "bad origin" });
   return next();
 }
-
 
 const GUEST_COOKIE = "sg_guest";
 const GUEST_EXPIRES_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
@@ -152,8 +132,6 @@ function ensureGuest(req, res, next) {
 
 app.use(ensureGuest);
 
-
-
 async function authFromSessionCookie(req, res, next) {
   const cookie = req.cookies[SESSION_COOKIE_NAME];
   if (!cookie) {
@@ -162,12 +140,8 @@ async function authFromSessionCookie(req, res, next) {
   }
 
   try {
-    // checkRevoked=true is safest; costs an extra lookup.
     const decoded = await admin.auth().verifySessionCookie(cookie, true);
-    req.user = {
-      uid: decoded.uid,
-      claims: decoded,
-    };
+    req.user = { uid: decoded.uid, claims: decoded };
     return next();
   } catch {
     req.user = null;
@@ -183,15 +157,11 @@ function rateLimitId(req) {
   return `ip:${req.ip}`;
 }
 
-
-// Client sends Firebase ID token after email/password sign-in.
-// Server verifies token and sets HttpOnly session cookie.
 app.post("/api/sessionLogin", requireSameOrigin, async (req, res) => {
   const idToken = req.body?.idToken;
   if (!idToken) return res.status(400).json({ error: "missing idToken" });
 
   try {
-    // Optional: verify first so you can reject disabled users, etc.
     const decoded = await admin.auth().verifyIdToken(idToken);
 
     const sessionCookie = await admin.auth().createSessionCookie(idToken, {
@@ -205,25 +175,16 @@ app.post("/api/sessionLogin", requireSameOrigin, async (req, res) => {
   }
 });
 
-// Clears cookie. If you want "log out everywhere", revoke refresh tokens too.
 app.post("/api/sessionLogout", requireSameOrigin, async (req, res) => {
   res.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
-
-  // Optional: global sign-out (forces session invalidation after revocation is checked)
   if (req.user?.uid) await admin.auth().revokeRefreshTokens(req.user.uid);
-
   return res.json({ ok: true });
 });
 
-// Convenience: see who server thinks you are
 app.get("/api/whoami", (req, res) => {
   if (!req.user) return res.json({ authed: false });
   return res.json({ authed: true, uid: req.user.uid });
 });
-
-
-
-
 
 // serve lobby on /
 app.get("/", (req, res) => {
@@ -263,7 +224,6 @@ function wsSend(ws, obj) {
   try { ws.send(JSON.stringify(obj)); } catch {}
 }
 
-
 function publishGame(g) {
   const set = wsSubs.get(g.id);
   if (!set || set.size === 0) return;
@@ -299,56 +259,48 @@ wss.on("connection", async (ws, req) => {
 
   const gameId = g.id;
   subAdd(gameId, ws);
-  
+
   const cookies = parseCookies(req.headers.cookie);
-let actor = null;
+  let actor = null;
 
-const sess = cookies[SESSION_COOKIE_NAME];
-if (sess) {
-  try {
-    const decoded = await admin.auth().verifySessionCookie(sess, true);
-    actor = { kind: "uid", id: decoded.uid };
-  } catch {}
-}
-if (!actor && cookies[GUEST_COOKIE]) actor = { kind: "guest", id: cookies[GUEST_COOKIE] };
+  const sess = cookies[SESSION_COOKIE_NAME];
+  if (sess) {
+    try {
+      const decoded = await admin.auth().verifySessionCookie(sess, true);
+      actor = { kind: "uid", id: decoded.uid };
+    } catch {}
+  }
+  if (!actor && cookies[GUEST_COOKIE]) actor = { kind: "guest", id: cookies[GUEST_COOKIE] };
 
-ws._actor = actor;
-wsSend(ws, { type:"state", state: gamePublicState(g, actor) });
-  
+  ws._actor = actor;
+  wsSend(ws, { type:"state", state: gamePublicState(g, actor) });
 
   ws.on("close", () => subDel(gameId, ws));
   ws.on("error", () => subDel(gameId, ws));
 
-  // keepalive
   ws.isAlive = true;
   ws.on("pong", () => { ws.isAlive = true; });
 
-  // (optional) allow client to request a resync
   ws.on("message", async (buf) => {
-  let m = null;
-  try { m = JSON.parse(buf.toString("utf8")); } catch {}
-  if (!m) return;
+    let m = null;
+    try { m = JSON.parse(buf.toString("utf8")); } catch {}
+    if (!m) return;
 
-  // App-level heartbeat for browser clients.
-  // Browsers do not surface WS ping/pong frames to JS.
-  // Keep the connection "chatty" and give the client an inbound signal.
-  if (m.type === "ping") {
-    wsSend(ws, { type: "pong", t: m.t || Date.now() });
-    return;
-  }
+    if (m.type === "ping") {
+      wsSend(ws, { type: "pong", t: m.t || Date.now() });
+      return;
+    }
 
-  // Client hello (optional; currently informational)
-  if (m.type === "hello") {
-    wsSend(ws, { type: "pong", t: Date.now() });
-    return;
-  }
+    if (m.type === "hello") {
+      wsSend(ws, { type: "pong", t: Date.now() });
+      return;
+    }
 
-  if (m.type === "resync") {
-    const fresh = await loadGameExact(gameId);
-    if (fresh) wsSend(ws, { type: "state", state: gamePublicState(fresh) });
-  }
-});
-
+    if (m.type === "resync") {
+      const fresh = await loadGameExact(gameId);
+      if (fresh) wsSend(ws, { type: "state", state: gamePublicState(fresh, actor) });
+    }
+  });
 });
 
 // heartbeat
@@ -361,7 +313,6 @@ const hb = setInterval(() => {
 }, 30_000);
 
 wss.on("close", () => clearInterval(hb));
-
 
 /* -----------------------------
    In-memory game store (dev)
@@ -390,15 +341,11 @@ async function cacheAction(gameId, clientActionId, payload) {
   const hkey = K.actions(gameId);
   const lkey = K.actionsOrder(gameId);
 
-  // write payload
   await rdb.hSet(hkey, clientActionId, JSON.stringify(payload));
-
-  // cap at 300 (mirror your old behavior)
   await rdb.lPush(lkey, clientActionId);
   await rdb.lTrim(lkey, 0, 299);
 
-  // best-effort cleanup: anything beyond 300 gets removed from hash
-  const overflow = await rdb.lRange(lkey, 300, 400); // small slice is enough
+  const overflow = await rdb.lRange(lkey, 300, 400);
   if (overflow.length) {
     await rdb.lTrim(lkey, 0, 299);
     await rdb.hDel(hkey, overflow);
@@ -411,7 +358,6 @@ async function getCachedAction(gameId, clientActionId) {
   return raw ? JSON.parse(raw) : null;
 }
 
-
 async function saveGame(g) {
   await rsetJson(K.game(g.id), g);
   await rdb.zAdd(K.updated, [{ score: g.updatedAt || nowMs(), value: g.id }]);
@@ -422,19 +368,15 @@ async function loadGameExact(id) {
   return await rgetJson(K.game(id));
 }
 
-// Keep your “open by prefix” behavior from resolveGame() :contentReference[oaicite:4]{index=4}.
-// Fast path: 8-char short id. Fallback: scan known ids (fine at this stage).
 async function resolveGame(idOrPrefix) {
   if (!idOrPrefix) return { g: null, error: "Missing id" };
 
   const raw = String(idOrPrefix).trim();
   if (!raw) return { g: null, error: "Missing id" };
 
-  // exact
   const exact = await loadGameExact(raw);
   if (exact) return { g: exact };
 
-  // short id mapping (8 chars)
   if (raw.length === 8) {
     const full = await rdb.get(K.short(raw));
     if (full) {
@@ -443,7 +385,6 @@ async function resolveGame(idOrPrefix) {
     }
   }
 
-  // fallback: prefix scan against ids in zset
   if (raw.length < 4) return { g: null, error: "Id too short" };
 
   const ids = await rdb.zRange(K.updated, 0, 500, { REV: true });
@@ -455,14 +396,11 @@ async function resolveGame(idOrPrefix) {
   return { g: null, error: "Ambiguous id (multiple matches)" };
 }
 
-
-
 function nowMs() {
   return Date.now();
 }
 
 function newGameId() {
-  // short + readable
   return crypto.randomBytes(9).toString("base64url");
 }
 
@@ -473,9 +411,7 @@ function mod(a, n) {
 
 function newBoard(N) {
   const b = new Array(N);
-  for (let y = 0; y < N; y++) {
-    b[y] = new Array(N).fill(0);
-  }
+  for (let y = 0; y < N; y++) b[y] = new Array(N).fill(0);
   return b;
 }
 
@@ -496,7 +432,6 @@ function neighborsWrap(x, y, N) {
   ];
 }
 
-// 64-bit FNV-1a hash using BigInt (deterministic, fast enough for dev)
 function fnv1a64(str) {
   let hash = 0xcbf29ce484222325n;
   const prime = 0x100000001b3n;
@@ -508,7 +443,6 @@ function fnv1a64(str) {
 }
 
 function hashPosition({ board, toMove }) {
-  // compact-ish stable encoding: toMove|rows separated by ;
   let s = "" + toMove + "|";
   for (let y = 0; y < board.length; y++) {
     for (let x = 0; x < board.length; x++) s += board[y][x];
@@ -567,6 +501,12 @@ function actorFromReq(req) {
   return null;
 }
 
+// Signed-in-only for lobby personalization
+function actorSignedInFromReq(req) {
+  if (req.user?.uid) return { kind: "uid", id: req.user.uid };
+  return null;
+}
+
 function pruneExpiredSeats(g) {
   const now = nowMs();
   for (const k of ["black", "white"]) {
@@ -597,7 +537,6 @@ function claimSeat(g, side, actor) {
   const cur = g.seats[key];
   if (cur && !sameOwner(cur, actor)) return { ok: false, reason: "Seat taken" };
 
-  // EXCLUSIVE: if you own the other seat, drop it when switching
   const other = g.seats[otherKey];
   if (other && sameOwner(other, actor)) {
     g.seats[otherKey] = null;
@@ -611,14 +550,13 @@ function claimSeat(g, side, actor) {
   return { ok: true };
 }
 
-
 function releaseSeat(g, side, actor) {
   pruneExpiredSeats(g);
   const key = seatKeyForSide(side);
   if (!key) return { ok: false, reason: "Bad side" };
 
   const cur = g.seats[key];
-  if (!cur) return { ok: true }; // already empty
+  if (!cur) return { ok: true };
   if (!sameOwner(cur, actor)) return { ok: false, reason: "Not owner" };
 
   g.seats[key] = null;
@@ -633,11 +571,9 @@ function requireTurnOwner(g, actor) {
   if (!cur) return { ok: false, reason: "Unclaimed side" };
   if (!sameOwner(cur, actor)) return { ok: false, reason: "Not your turn" };
 
-  // refresh guest TTL on activity
   if (cur.kind === "guest") cur.expiresAt = nowMs() + SEAT_GUEST_TTL_MS;
   return { ok: true };
 }
-
 
 function createGame(N = 19, name = "") {
   const id = newGameId();
@@ -659,12 +595,12 @@ function createGame(N = 19, name = "") {
     rev: 0,
     seen: [],
 
-    scoreAccept: { black: false, white: false },  // both must be true to finish
-    scoreDraftRev: 0,                              // bumps whenever deadSet/scoreResult changes
-    finishedAt: 0,                                 // 0 until finished
-	
+    scoreAccept: { black: false, white: false },
+    scoreDraftRev: 0,
+    finishedAt: 0,
+
     seats: {
-      black: null, // { kind:'uid'|'guest', id:'...', claimedAt, expiresAt? }
+      black: null,
       white: null,
     },
 
@@ -675,7 +611,6 @@ function createGame(N = 19, name = "") {
   g.seen.push(hashPosition(g));
   return g;
 }
-
 
 function gamePublicState(g, actor = null) {
   pruneExpiredSeats(g);
@@ -708,12 +643,10 @@ function gamePublicState(g, actor = null) {
       whiteTaken: !!(g.seats && g.seats.white),
     },
     you: {
-      side: viewerSide(g, actor), // 0/1/2
+      side: viewerSide(g, actor),
     },
   };
 }
-
-
 
 /* -----------------------------
    Rules: play + superko
@@ -770,7 +703,6 @@ function tryPlay(g, ax, ay) {
 
   b[y][x] = me;
 
-  // capture adjacent opponent groups with 0 liberties
   let captured = 0;
   const checked = new Set();
   for (const [nx, ny] of neighborsWrap(x, y, N)) {
@@ -787,16 +719,13 @@ function tryPlay(g, ax, ay) {
     }
   }
 
-  // suicide check (after captures)
   const myGroup = collectGroupAndLiberties(b, x, y, N);
   if (myGroup.liberties === 0) return { ok: false, reason: "Suicide" };
 
-  // superko: check resulting position with next player to move
   const nextToMove = opp;
   const nextHash = hashPosition({ board: b, toMove: nextToMove });
   if (seenHas(g, nextHash)) return { ok: false, reason: "Superko" };
 
-  // commit
   g.board = b;
   g.toMove = nextToMove;
   g.passStreak = 0;
@@ -852,7 +781,6 @@ function doSetPhase(g, phase) {
   return { ok: true };
 }
 
-// scoring toggles (server-side bookkeeping only for now)
 function doToggleDead(g, ax, ay) {
   if (g.phase !== "scoring") return { ok: false, reason: "Not scoring" };
 
@@ -871,7 +799,6 @@ function doToggleDead(g, ax, ay) {
     [x, mod(y - 1, N)],
   ]);
 
-  // collect connected group (stones only)
   const stack = [[x0, y0]];
   const seen = new Set([key(x0, y0)]);
   const stones = [];
@@ -889,7 +816,6 @@ function doToggleDead(g, ax, ay) {
     }
   }
 
-  // toggle whole group: if ANY is dead -> revive all, else kill all
   let anyDead = false;
   for (const [sx, sy] of stones) {
     if (deadHas(g, key(sx, sy))) { anyDead = true; break; }
@@ -901,9 +827,7 @@ function doToggleDead(g, ax, ay) {
     for (const [sx, sy] of stones) deadAdd(g, key(sx, sy));
   }
 
-  // draft score is now stale
   g.scoreResult = null;
-
   g.updatedAt = nowMs();
   return { ok: true };
 }
@@ -922,7 +846,6 @@ function computeScoreServer(g) {
 
   const ownership = Array.from({ length: N }, () => Array(N).fill(0));
 
-  // count stones (dead treated empty)
   for (let y = 0; y < N; y++) {
     for (let x = 0; x < N; x++) {
       const v = valueForScoring(x, y);
@@ -941,7 +864,6 @@ function computeScoreServer(g) {
 
   const visited = new Set();
 
-  // flood-fill empty regions, wrapped adjacency
   for (let y = 0; y < N; y++) {
     for (let x = 0; x < N; x++) {
       if (valueForScoring(x, y) !== 0) continue;
@@ -953,7 +875,7 @@ function computeScoreServer(g) {
 
       const region = [];
       let regionSize = 0;
-      const border = new Set(); // colors touching region
+      const border = new Set();
 
       while (stack.length) {
         const [cx, cy] = stack.pop();
@@ -975,7 +897,7 @@ function computeScoreServer(g) {
       }
 
       if (border.size === 1) {
-        const owner = border.values().next().value; // 1 or 2
+        const owner = border.values().next().value;
         if (owner === 1) blackTerritory += regionSize;
         else if (owner === 2) whiteTerritory += regionSize;
 
@@ -996,7 +918,6 @@ function computeScoreServer(g) {
   };
 }
 
-
 function doFinalizeScoring(g) {
   if (g.phase !== "scoring") return { ok: false, reason: "Not scoring" };
 
@@ -1005,43 +926,111 @@ function doFinalizeScoring(g) {
   return { ok: true };
 }
 
-
 /* -----------------------------
    API
 ------------------------------ */
 
-// health
 app.get("/api/health", async (req, res) => {
   const count = await rdb.zCard(K.updated);
   res.json({ ok: true, games: count });
 });
 
+app.get(
+  "/api/games",
+  rateLimit({ capacity: 60, refillPerSec: 5, keyFn: rateLimitId }),
+  async (req, res) => {
+    const scope = String(req.query?.scope || "all"); // "all" | "mine"
+    const cursorRaw = req.query?.cursor;
+    const limitRaw = req.query?.limit;
 
-app.get("/api/games", rateLimit({
-    capacity: 60,
-    refillPerSec: 5, // burst ok
-    keyFn: rateLimitId
-  }), async (req, res) => {
-  const ids = await rdb.zRange(K.updated, 0, 200, { REV: true });
-  const out = [];
+    const cursor = Math.max(0, Number.isFinite(Number(cursorRaw)) ? Math.trunc(Number(cursorRaw)) : 0);
+    const limit = Math.max(1, Math.min(100, Number.isFinite(Number(limitRaw)) ? Math.trunc(Number(limitRaw)) : (scope === "mine" ? 200 : 50)));
 
-  for (const id of ids) {
-    const g = await loadGameExact(id);
-    if (!g) continue;
-    out.push({
-      gameId: g.id,
-      name: g.name,
-      moveCount: g.moveCount,
-      N: g.N,
-      rev: g.rev,
-      phase: g.phase,
-      createdAt: g.createdAt,
-      updatedAt: g.updatedAt,
+    const actor = actorSignedInFromReq(req);
+
+    // For "all", total is total games. For "mine", total is unknown without scanning; return total=null.
+    const totalAll = scope === "all" ? await rdb.zCard(K.updated) : null;
+
+    const ids = await rdb.zRange(K.updated, cursor, cursor + limit - 1, { REV: true });
+    const out = [];
+
+    // If scope=mine, we scan forward until we collect "limit" seated games (with a hard scan cap).
+    const scanCap = scope === "mine" ? 2000 : ids.length;
+    let scanned = 0;
+
+    async function pushGame(id) {
+      const g = await loadGameExact(id);
+      if (!g) return;
+      pruneExpiredSeats(g);
+
+      const side = actor ? viewerSide(g, actor) : 0;
+      if (scope === "mine" && !(side === 1 || side === 2)) return;
+
+      const yourTurn = !!(side && g.phase === "play" && g.toMove === side);
+
+      out.push({
+        gameId: g.id,
+        name: g.name,
+        moveCount: g.moveCount,
+        N: g.N,
+        rev: g.rev,
+        phase: g.phase,
+        createdAt: g.createdAt,
+        updatedAt: g.updatedAt,
+        youSide: side,
+        yourTurn,
+      });
+    }
+
+    if (scope === "all") {
+      for (const id of ids) await pushGame(id);
+      const nextCursor = cursor + ids.length;
+      return res.json({
+        ok: true,
+        games: out,
+        cursor,
+        limit,
+        total: totalAll,
+        nextCursor,
+        hasMore: nextCursor < totalAll,
+      });
+    }
+
+    // scope === "mine": scan starting at cursor until we fill "limit" or hit scanCap
+    let scanCursor = cursor;
+    while (out.length < limit && scanned < scanCap) {
+      const batch = await rdb.zRange(K.updated, scanCursor, scanCursor + 49, { REV: true });
+      if (!batch.length) break;
+      for (const id of batch) {
+        await pushGame(id);
+        scanned++;
+        if (out.length >= limit) break;
+        if (scanned >= scanCap) break;
+      }
+      scanCursor += batch.length;
+      if (batch.length < 50) break;
+    }
+
+    // Sort mine: yourTurn first, then newest
+    out.sort((a, b) => {
+      const at = a.yourTurn ? 1 : 0;
+      const bt = b.yourTurn ? 1 : 0;
+      if (bt !== at) return bt - at;
+      return (b.updatedAt || 0) - (a.updatedAt || 0);
+    });
+
+    return res.json({
+      ok: true,
+      games: out,
+      cursor,
+      limit,
+      total: null,
+      nextCursor: scanCursor,
+      hasMore: false,
     });
   }
+);
 
-  res.json({ ok: true, games: out });
-});
 
 
 app.delete("/api/game/:gameId", async (req, res) => {
@@ -1052,243 +1041,232 @@ app.delete("/api/game/:gameId", async (req, res) => {
   await rdb.zRem(K.updated, g.id);
   await rdb.del(K.short(g.id.slice(0, 8)));
 
-  // cleanup action cache
   await rdb.del(K.actions(g.id));
   await rdb.del(K.actionsOrder(g.id));
 
   res.json({ ok: true, deleted: true, gameId: g.id });
 });
 
-// create new game (now accepts { N, name })
-app.post("/api/game/new", rateLimit({
-    capacity: 3,
-    refillPerSec: 1 / 60, // 1 per minute
-    keyFn: rateLimitId
-  }), async (req, res) => {
-  const Nraw = req.body?.N ?? 19;
-  const name = req.body?.name ?? "";
+app.post(
+  "/api/game/new",
+  rateLimit({ capacity: 3, refillPerSec: 1 / 60, keyFn: rateLimitId }),
+  async (req, res) => {
+    const Nraw = req.body?.N ?? 19;
+    const name = req.body?.name ?? "";
 
-  const N = Number(Nraw);
-  const safeN = Number.isInteger(N) && N >= 3 && N <= 49 ? N : 19;
+    const N = Number(Nraw);
+    const safeN = Number.isInteger(N) && N >= 3 && N <= 49 ? N : 19;
 
-  const g = createGame(safeN, name);
-  await saveGame(g);
-  publishGame(g);
+    const g = createGame(safeN, name);
+    await saveGame(g);
+    publishGame(g);
 
-  res.json({ ok: true, gameId: g.id, state: gamePublicState(g) });
-});
+    res.json({ ok: true, gameId: g.id, state: gamePublicState(g) });
+  }
+);
 
-// get game state
 app.get("/api/game/:gameId", async (req, res) => {
   const { g, error } = await resolveGame(req.params.gameId);
   if (!g) return res.status(404).json({ ok: false, error });
-  res.json({ ok: true, state: gamePublicState(g) });
-});
 
-// single action endpoint
-app.post("/api/move", rateLimit({
-    capacity: 30,
-    refillPerSec: 1, // 1/sec sustained
-    keyFn: rateLimitId
-  }), async (req, res) => {
-  const { gameId, action, rev, clientActionId } = req.body || {};
-  if (!gameId || !action || !action.type) {
-    return res.status(400).json({ ok: false, error: "Missing gameId/action" });
-  }
-
-  // identity (firebase uid or guest cookie)
   const actor = actorFromReq(req);
-  if (!actor) {
-    return res.status(401).json({ ok: false, error: "No identity" });
-  }
-
-  // idempotency
-  const cached = await getCachedAction(gameId, clientActionId);
-  if (cached) return res.json(cached);
-
-  // resolve
-  const resolved = await resolveGame(gameId);
-  if (!resolved.g) return res.status(404).json({ ok: false, error: resolved.error });
-  const id = resolved.g.id;
-
-  const key = K.game(id);
-
-  // WATCH for concurrent writers
-  await rdb.watch(key);
-
-  let g = await rgetJson(key);
-  if (!g) {
-    await rdb.unwatch();
-    return res.status(404).json({ ok: false, error: "Game not found" });
-  }
-
-  if (!Number.isInteger(rev) || rev !== g.rev) {
-    await rdb.unwatch();
-    return res.status(409).json({ ok: false, error: "Out of date", state: gamePublicState(g, actor) });
-  }
-
-  let r;
-  const t = action.type;
-
-  if (t === "claim") {
-    const side = Number(action.side);
-    if (side !== 1 && side !== 2) {
-      await rdb.unwatch();
-      return res.status(400).json({ ok: false, error: "Bad side" });
-    }
-    r = claimSeat(g, side, actor);
-
-  } else if (t === "release") {
-    const side = Number(action.side);
-    if (side !== 1 && side !== 2) {
-      await rdb.unwatch();
-      return res.status(400).json({ ok: false, error: "Bad side" });
-    }
-    r = releaseSeat(g, side, actor);
-
-  } else if (t === "play") {
-    const ax = Number.isFinite(action.ax) ? action.ax : action.bx;
-    const ay = Number.isFinite(action.ay) ? action.ay : action.by;
-    if (!Number.isFinite(ax) || !Number.isFinite(ay)) {
-      await rdb.unwatch();
-      return res.status(400).json({ ok: false, error: "Missing coordinates" });
-    }
-
-    const gate = requireTurnOwner(g, actor);
-    if (!gate.ok) r = gate;
-    else r = tryPlay(g, ax, ay);
-
-  } else if (t === "pass") {
-    const gate = requireTurnOwner(g, actor);
-    if (!gate.ok) r = gate;
-    else r = doPass(g);
-
-  } else if (t === "reset") {
-    const N = action.N ?? g.N;
-    r = doReset(g, Number(N));
-
-  } else if (t === "setPhase") {
-    r = doSetPhase(g, action.phase);
-
-  } else if (t === "toggleDead") {
-    const ax = action.ax, ay = action.ay;
-    if (!Number.isFinite(ax) || !Number.isFinite(ay)) {
-      await rdb.unwatch();
-      return res.status(400).json({ ok: false, error: "Missing coordinates" });
-    }
-    if (g.phase !== "scoring") {
-      r = { ok: false, reason: "Not in scoring" };
-    } else {
-      r = doToggleDead(g, ax, ay);
-      if (r.ok) {
-        // any change invalidates previous accepts + score draft
-        invalidateScoreAccept(g);
-        g.scoreResult = null; // force re-finalize after edits
-      }
-    }
-
-  } else if (t === "finalizeScore") {
-    if (g.phase !== "scoring") {
-      r = { ok: false, reason: "Not in scoring" };
-    } else {
-      r = doFinalizeScoring(g); // this should set g.scoreResult
-      if (r.ok) {
-        invalidateScoreAccept(g);
-        // optional: auto-accept for the proposer’s side (nice UX)
-        const k = seatKeyForSide(viewerSide(g, actor));
-        if (k) g.scoreAccept[k] = true;
-      }
-    }
-  } else if (t === "acceptScore") {
-    if (g.phase !== "scoring") {
-      r = { ok: false, reason: "Not in scoring" };
-    } else if (!g.scoreResult) {
-      r = { ok: false, reason: "No score draft" };
-    } else {
-      const side = viewerSide(g, actor); // 0/1/2
-      const k = seatKeyForSide(side);
-      if (!k) {
-        r = { ok: false, reason: "You don't own a seat" };
-      } else {
-        if (!g.scoreAccept) g.scoreAccept = { black: false, white: false };
-        g.scoreAccept[k] = true;
-        maybeFinishIfAccepted(g);
-        r = { ok: true };
-      }
-    }
-  } else if (t === "unacceptScore") {
-    if (g.phase !== "scoring") r = { ok: false, reason: "Not in scoring" };
-    else {
-      const side = viewerSide(g, actor);
-      const k = seatKeyForSide(side);
-      if (!k) r = { ok: false, reason: "You don't own a seat" };
-      else {
-        if (!g.scoreAccept) g.scoreAccept = { black: false, white: false };
-        g.scoreAccept[k] = false;
-        r = { ok: true };
-      }
-    }
-  } else if (t === "resign") {
-    g.phase = "scoring";
-    const who =
-      actor.kind === "uid" ? `uid:${actor.id}` :
-      actor.kind === "guest" ? "guest" :
-      "player";
-    g.scoreResult = { note: `${who} resigned` };
-    g.updatedAt = nowMs();
-    r = { ok: true };
-
-  } else {
-    await rdb.unwatch();
-    return res.status(400).json({ ok: false, error: "Unknown action type" });
-  }
-
-  const countsAsMove = (t === "play" || t === "pass");
-
-  let payload;
-  if (!r.ok) {
-    payload = {
-      ok: true,
-      accepted: false,
-      reason: r.reason || "Rejected",
-      state: gamePublicState(g, actor),
-    };
-  } else {
-    if (countsAsMove) g.moveCount += 1;
-
-    // any accepted action that mutates state bumps rev
-    g.rev += 1;
-    g.updatedAt = nowMs();
-
-    payload = {
-      ok: true,
-      accepted: true,
-      meta: { captured: r.captured || 0 },
-      state: gamePublicState(g, actor),
-    };
-  }
-
-  // transaction commit
-  const multi = rdb.multi();
-  multi.set(key, JSON.stringify(g));
-  multi.zAdd(K.updated, [{ score: g.updatedAt || nowMs(), value: g.id }]);
-  multi.set(K.short(g.id.slice(0, 8)), g.id);
-
-  const execRes = await multi.exec(); // null => watched key changed
-  if (execRes === null) {
-    const fresh = await rgetJson(key);
-    return res.status(409).json({
-      ok: false,
-      error: "Out of date",
-      state: gamePublicState(fresh || g, actor),
-    });
-  }
-
-  publishGame(g);
-  await cacheAction(g.id, clientActionId, payload);
-  return res.json(payload);
+  res.json({ ok: true, state: gamePublicState(g, actor) });
 });
 
+app.post(
+  "/api/move",
+  rateLimit({ capacity: 30, refillPerSec: 1, keyFn: rateLimitId }),
+  async (req, res) => {
+    const { gameId, action, rev, clientActionId } = req.body || {};
+    if (!gameId || !action || !action.type) {
+      return res.status(400).json({ ok: false, error: "Missing gameId/action" });
+    }
+
+    const actor = actorFromReq(req);
+    if (!actor) return res.status(401).json({ ok: false, error: "No identity" });
+
+    const cached = await getCachedAction(gameId, clientActionId);
+    if (cached) return res.json(cached);
+
+    const resolved = await resolveGame(gameId);
+    if (!resolved.g) return res.status(404).json({ ok: false, error: resolved.error });
+    const id = resolved.g.id;
+
+    const key = K.game(id);
+    await rdb.watch(key);
+
+    let g = await rgetJson(key);
+    if (!g) {
+      await rdb.unwatch();
+      return res.status(404).json({ ok: false, error: "Game not found" });
+    }
+
+    if (!Number.isInteger(rev) || rev !== g.rev) {
+      await rdb.unwatch();
+      return res.status(409).json({ ok: false, error: "Out of date", state: gamePublicState(g, actor) });
+    }
+
+    let r;
+    const t = action.type;
+
+    if (t === "claim") {
+      const side = Number(action.side);
+      if (side !== 1 && side !== 2) {
+        await rdb.unwatch();
+        return res.status(400).json({ ok: false, error: "Bad side" });
+      }
+      r = claimSeat(g, side, actor);
+
+    } else if (t === "release") {
+      const side = Number(action.side);
+      if (side !== 1 && side !== 2) {
+        await rdb.unwatch();
+        return res.status(400).json({ ok: false, error: "Bad side" });
+      }
+      r = releaseSeat(g, side, actor);
+
+    } else if (t === "play") {
+      const ax = Number.isFinite(action.ax) ? action.ax : action.bx;
+      const ay = Number.isFinite(action.ay) ? action.ay : action.by;
+      if (!Number.isFinite(ax) || !Number.isFinite(ay)) {
+        await rdb.unwatch();
+        return res.status(400).json({ ok: false, error: "Missing coordinates" });
+      }
+
+      const gate = requireTurnOwner(g, actor);
+      if (!gate.ok) r = gate;
+      else r = tryPlay(g, ax, ay);
+
+    } else if (t === "pass") {
+      const gate = requireTurnOwner(g, actor);
+      if (!gate.ok) r = gate;
+      else r = doPass(g);
+
+    } else if (t === "reset") {
+      const N = action.N ?? g.N;
+      r = doReset(g, Number(N));
+
+    } else if (t === "setPhase") {
+      r = doSetPhase(g, action.phase);
+
+    } else if (t === "toggleDead") {
+      const ax = action.ax, ay = action.ay;
+      if (!Number.isFinite(ax) || !Number.isFinite(ay)) {
+        await rdb.unwatch();
+        return res.status(400).json({ ok: false, error: "Missing coordinates" });
+      }
+      if (g.phase !== "scoring") {
+        r = { ok: false, reason: "Not in scoring" };
+      } else {
+        r = doToggleDead(g, ax, ay);
+        if (r.ok) {
+          invalidateScoreAccept(g);
+          g.scoreResult = null;
+        }
+      }
+
+    } else if (t === "finalizeScore") {
+      if (g.phase !== "scoring") {
+        r = { ok: false, reason: "Not in scoring" };
+      } else {
+        r = doFinalizeScoring(g);
+        if (r.ok) {
+          invalidateScoreAccept(g);
+          const k = seatKeyForSide(viewerSide(g, actor));
+          if (k) g.scoreAccept[k] = true;
+        }
+      }
+
+    } else if (t === "acceptScore") {
+      if (g.phase !== "scoring") {
+        r = { ok: false, reason: "Not in scoring" };
+      } else if (!g.scoreResult) {
+        r = { ok: false, reason: "No score draft" };
+      } else {
+        const side = viewerSide(g, actor);
+        const k = seatKeyForSide(side);
+        if (!k) {
+          r = { ok: false, reason: "You don't own a seat" };
+        } else {
+          if (!g.scoreAccept) g.scoreAccept = { black: false, white: false };
+          g.scoreAccept[k] = true;
+          maybeFinishIfAccepted(g);
+          r = { ok: true };
+        }
+      }
+
+    } else if (t === "unacceptScore") {
+      if (g.phase !== "scoring") r = { ok: false, reason: "Not in scoring" };
+      else {
+        const side = viewerSide(g, actor);
+        const k = seatKeyForSide(side);
+        if (!k) r = { ok: false, reason: "You don't own a seat" };
+        else {
+          if (!g.scoreAccept) g.scoreAccept = { black: false, white: false };
+          g.scoreAccept[k] = false;
+          r = { ok: true };
+        }
+      }
+
+    } else if (t === "resign") {
+      g.phase = "scoring";
+      const who =
+        actor.kind === "uid" ? `uid:${actor.id}` :
+        actor.kind === "guest" ? "guest" :
+        "player";
+      g.scoreResult = { note: `${who} resigned` };
+      g.updatedAt = nowMs();
+      r = { ok: true };
+
+    } else {
+      await rdb.unwatch();
+      return res.status(400).json({ ok: false, error: "Unknown action type" });
+    }
+
+    const countsAsMove = (t === "play" || t === "pass");
+
+    let payload;
+    if (!r.ok) {
+      payload = {
+        ok: true,
+        accepted: false,
+        reason: r.reason || "Rejected",
+        state: gamePublicState(g, actor),
+      };
+    } else {
+      if (countsAsMove) g.moveCount += 1;
+
+      g.rev += 1;
+      g.updatedAt = nowMs();
+
+      payload = {
+        ok: true,
+        accepted: true,
+        meta: { captured: r.captured || 0 },
+        state: gamePublicState(g, actor),
+      };
+    }
+
+    const multi = rdb.multi();
+    multi.set(key, JSON.stringify(g));
+    multi.zAdd(K.updated, [{ score: g.updatedAt || nowMs(), value: g.id }]);
+    multi.set(K.short(g.id.slice(0, 8)), g.id);
+
+    const execRes = await multi.exec();
+    if (execRes === null) {
+      const fresh = await rgetJson(key);
+      return res.status(409).json({
+        ok: false,
+        error: "Out of date",
+        state: gamePublicState(fresh || g, actor),
+      });
+    }
+
+    publishGame(g);
+    await cacheAction(g.id, clientActionId, payload);
+    return res.json(payload);
+  }
+);
 
 /* -----------------------------
    Startup

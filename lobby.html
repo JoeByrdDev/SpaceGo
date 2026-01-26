@@ -1,4 +1,3 @@
-<!-- lobby.html -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -10,8 +9,9 @@
     .wrap { min-height:100%; display:flex; align-items:center; justify-content:center; padding:24px; box-sizing:border-box; }
     .card { width: min(920px, 100%); border:1px solid #202733; background:#0f1318; border-radius:16px; padding:16px; box-sizing:border-box; }
     h1 { font-size:18px; margin:0 0 8px; font-weight:650; }
+    h2 { font-size:13px; margin:14px 0 8px; font-weight:650; opacity:0.95; }
     .muted { opacity:0.8; font-size:12px; }
-    input, button {
+    input, select, button {
       background:#0b0d10; color:#e9eef5;
       border:1px solid #2a3443; border-radius:10px;
       padding:10px 12px; font-size:14px;
@@ -25,7 +25,7 @@
     .ok { color:#b9ffcc; }
 
     .list {
-      margin-top: 12px;
+      margin-top: 10px;
       border: 1px solid #202733;
       border-radius: 14px;
       overflow: hidden;
@@ -62,45 +62,67 @@
     .gameRow .colMoves { flex: 0 0 84px; opacity: 0.9; }
     .gameRow .colPhase { flex: 0 0 82px; opacity: 0.9; text-transform: lowercase; }
     .gameRow .colWhen { flex: 0 0 140px; text-align:right; opacity: 0.75; font-size: 12px; }
-    .nameCell { font-weight: 650; }
+    .nameCell { font-weight: 650; display:flex; align-items:center; gap:8px; }
     .subCell { font-size: 12px; opacity: 0.75; margin-top: 2px; }
+
+    .tag {
+      display:inline-flex;
+      align-items:center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid #2a3443;
+      background: #0b0d10;
+      font-size: 11px;
+      opacity: 0.95;
+      white-space: nowrap;
+    }
+    .tag.turn { border-color: #3c5a7a; }
+    .tag.seat { border-color: #2f4b38; }
+    .gameRow.yourTurn { background: #101a26; }
+    .gameRow.yourTurn:hover { background: #122035; }
+
+    .createRow { flex-wrap: wrap; }
+.createRow .nameLabel { flex: 0 0 auto; }
+.createRow #name { flex: 1 1 260px; min-width: 220px; }
+.createRow .bsGroup { display:inline-flex; align-items:center; gap:10px; white-space: nowrap; flex: 0 0 auto; }
+.createRow #create { flex: 0 0 auto; }
+
+    .emptyRow {
+      padding: 12px;
+      opacity: 0.75;
+      font-size: 12px;
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
-	
-	
-	
-	
-	<div style="border:1px solid #333; padding:10px; margin:10px 0;">
-  <div>
-    <input id="authEmail" type="email" placeholder="email" />
-    <input id="authPass" type="password" placeholder="password" />
-  </div>
-  <div style="margin-top:8px;">
-    <button id="authLogin">Login</button>
-    <button id="authSignup">Sign up</button>
-    <button id="authLogout">Logout</button>
-    <span id="authStatus" style="margin-left:10px;"></span>
-  </div>
-</div>
 
-<script type="module">
-  import { wireAuthUI } from "./auth_client.js";
+      <div style="border:1px solid #333; padding:10px; margin:10px 0;">
+        <div>
+          <input id="authEmail" type="email" placeholder="email" />
+          <input id="authPass" type="password" placeholder="password" />
+        </div>
+        <div style="margin-top:8px;">
+          <button id="authLogin">Login</button>
+          <button id="authSignup">Sign up</button>
+          <button id="authLogout">Logout</button>
+          <span id="authStatus" style="margin-left:10px;"></span>
+        </div>
+      </div>
 
-  wireAuthUI({
-    emailEl: document.getElementById("authEmail"),
-    passEl: document.getElementById("authPass"),
-    statusEl: document.getElementById("authStatus"),
-    btnLogin: document.getElementById("authLogin"),
-    btnSignup: document.getElementById("authSignup"),
-    btnLogout: document.getElementById("authLogout"),
-  });
-</script>
+      <script type="module">
+        import { wireAuthUI } from "./auth_client.js";
 
-
-
+        wireAuthUI({
+          emailEl: document.getElementById("authEmail"),
+          passEl: document.getElementById("authPass"),
+          statusEl: document.getElementById("authStatus"),
+          btnLogin: document.getElementById("authLogin"),
+          btnSignup: document.getElementById("authSignup"),
+          btnLogout: document.getElementById("authLogout"),
+        });
+      </script>
 
       <h1>Lobby</h1>
       <div class="muted">Create a game (named), or click an existing game to open it.</div>
@@ -110,7 +132,25 @@
         <div class="spacer"></div>
         <div class="status" id="status"></div>
       </div>
+	  
+	  
 
+
+      <h2>Your seated games</h2>
+      <div class="muted" id="myHint" style="margin-top:-2px;"></div>
+      <div class="list" id="myList">
+        <div class="listHeader">
+          <div class="colId">id</div>
+          <div>name</div>
+          <div class="colN">N</div>
+          <div class="colMoves">moves</div>
+          <div class="colPhase">phase</div>
+          <div class="colWhen">updated</div>
+        </div>
+        <div id="myGameList"></div>
+      </div>
+
+      <h2 style="margin-top:16px;">All games</h2>
       <div class="list" id="list">
         <div class="listHeader">
           <div class="colId">id</div>
@@ -122,12 +162,22 @@
         </div>
         <div id="gameList"></div>
       </div>
+	  
+	  <div class="row" style="margin-top:10px;">
+        <button id="prevPage">Prev</button>
+        <button id="nextPage">Next</button>
+        <div class="spacer"></div>
+        <div class="status" id="pageInfo"></div>
+      </div>
 
       <div class="row" style="margin-top:14px;">
         <div class="muted">Create new:</div>
         <input id="name" type="text" placeholder="game name" style="width: 260px" />
-        <input id="size" type="number" min="5" max="49" value="19" style="width: 120px" />
-        <button id="create">Create</button>
+        <span class="bsGroup">
+    <span class="muted">Board Size:</span>
+    <select id="size" style="width: 120px"></select>
+    <button id="create">Create</button>
+  </span>
       </div>
 
       <div class="row">
@@ -142,7 +192,17 @@
 
 <script>
   const elList = document.getElementById('gameList');
+  const elMyList = document.getElementById('myGameList');
   const elStatus = document.getElementById('status');
+  const elMyHint = document.getElementById('myHint');
+
+  const btnPrev = document.getElementById('prevPage');
+  const btnNext = document.getElementById('nextPage');
+  const elPageInfo = document.getElementById('pageInfo');
+
+  let pageCursor = 0;
+  const pageLimit = 50;
+  let lastTotal = 0;
 
   function setStatus(msg, kind) {
     elStatus.textContent = msg || '';
@@ -195,13 +255,27 @@
     window.location.href = `/game.html?gameId=${encodeURIComponent(gameId)}`;
   }
 
-  function clearList() {
-    while (elList.firstChild) elList.removeChild(elList.firstChild);
+  function clearEl(el) {
+    while (el.firstChild) el.removeChild(el.firstChild);
   }
 
-  function addRow(g) {
+  function seatLabel(side) {
+    if (side === 1) return 'Seated: Black';
+    if (side === 2) return 'Seated: White';
+    return '';
+  }
+
+  function addEmpty(el, text) {
+    const empty = document.createElement('div');
+    empty.className = 'emptyRow';
+    empty.textContent = text;
+    el.appendChild(empty);
+  }
+
+  function addRow(g, targetEl) {
     const row = document.createElement('div');
     row.className = 'gameRow';
+    if (g.yourTurn) row.classList.add('yourTurn');
     row.addEventListener('click', () => goGame(g.gameId));
 
     const shortId = (g.gameId || '').slice(0, 8);
@@ -211,12 +285,32 @@
     cId.textContent = shortId;
 
     const cName = document.createElement('div');
+
     const nameTop = document.createElement('div');
     nameTop.className = 'nameCell';
-    nameTop.textContent = (g.name || '(unnamed)');
+
+    const nameText = document.createElement('span');
+    nameText.textContent = (g.name || '(unnamed)');
+    nameTop.appendChild(nameText);
+
+    if (g.yourTurn) {
+      const t = document.createElement('span');
+      t.className = 'tag turn';
+      t.textContent = 'Your turn';
+      nameTop.appendChild(t);
+    }
+
+    if (g.youSide === 1 || g.youSide === 2) {
+      const t2 = document.createElement('span');
+      t2.className = 'tag seat';
+      t2.textContent = seatLabel(g.youSide);
+      nameTop.appendChild(t2);
+    }
+
     const nameSub = document.createElement('div');
     nameSub.className = 'subCell';
     nameSub.textContent = `rev ${g.rev ?? 0} • ${g.gameId || ''}`;
+
     cName.appendChild(nameTop);
     cName.appendChild(nameSub);
 
@@ -243,35 +337,81 @@
     row.appendChild(cPhase);
     row.appendChild(cWhen);
 
-    elList.appendChild(row);
+    targetEl.appendChild(row);
   }
 
-  function fillList(games) {
-    clearList();
-    if (!games.length) {
-      const empty = document.createElement('div');
-      empty.style.padding = '12px';
-      empty.style.opacity = '0.75';
-      empty.textContent = 'No games yet';
-      elList.appendChild(empty);
+  function sortGames(games) {
+    return [...games].sort((a, b) => {
+      const at = a.yourTurn ? 1 : 0;
+      const bt = b.yourTurn ? 1 : 0;
+      if (bt !== at) return bt - at;
+      return (b.updatedAt || 0) - (a.updatedAt || 0);
+    });
+  }
+
+  function fillAll(games) {
+    clearEl(elList);
+    if (!games.length) return addEmpty(elList, 'No games yet');
+    const sorted = sortGames(games);
+    for (const g of sorted) addRow(g, elList);
+  }
+
+  function fillMine(games, authed) {
+    clearEl(elMyList);
+
+    if (!authed) {
+      elMyHint.textContent = 'Sign in to see your seated games.';
+      addEmpty(elMyList, 'Signed out');
       return;
     }
-    for (const g of games) addRow(g);
+
+    const mine = sortGames(games.filter(g => g.youSide === 1 || g.youSide === 2));
+    elMyHint.textContent = mine.length ? '' : 'None yet.';
+    if (!mine.length) return addEmpty(elMyList, 'No seated games');
+    for (const g of mine) addRow(g, elMyList);
   }
 
-  async function refresh() {
-    setStatus('Loading…');
-    try {
-      const out = await apiGet('/api/games');
-      const games = (out && out.games) ? out.games : [];
-      fillList(games);
-      setStatus(games.length ? `Loaded ${games.length} games` : 'No games yet', games.length ? 'ok' : '');
-    } catch (e) {
-      setStatus(e.message || 'Failed', 'danger');
-    }
-  }
+async function refresh() {
+  setStatus('Loading…');
+  try {
+    const who = await apiGet('/api/whoami');
 
-  document.getElementById('refresh').addEventListener('click', refresh);
+    const mineResp = await apiGet(`/api/games?scope=mine&limit=200`);
+    const allResp = await apiGet(`/api/games?scope=all&cursor=${pageCursor}&limit=${pageLimit}`);
+
+    fillMine(mineResp.games || [], !!who.authed);
+    fillAll(allResp.games || []);
+
+    const total = allResp.total || 0;
+    const start = total ? (allResp.cursor + 1) : 0;
+    const end = allResp.cursor + (allResp.games ? allResp.games.length : 0);
+
+    elPageInfo.textContent = total ? `Showing ${start}-${end} of ${total}` : '';
+    btnPrev.disabled = (allResp.cursor || 0) <= 0;
+    btnNext.disabled = !allResp.hasMore;
+
+    setStatus((allResp.games || []).length ? `Loaded ${end} / ${total}` : 'No games yet', (allResp.games || []).length ? 'ok' : '');
+  } catch (e) {
+    setStatus(e.message || 'Failed', 'danger');
+  }
+}
+
+
+
+    document.getElementById('refresh').addEventListener('click', () => {
+    pageCursor = 0;
+    refresh();
+  });
+
+  btnPrev?.addEventListener('click', () => {
+    pageCursor = Math.max(0, pageCursor - pageLimit);
+    refresh();
+  });
+
+  btnNext?.addEventListener('click', () => {
+    pageCursor = pageCursor + pageLimit;
+    refresh();
+  });
 
   document.getElementById('create').addEventListener('click', async () => {
     const N = clampInt(document.getElementById('size').value, 5, 49, 19);
@@ -301,6 +441,19 @@
       setStatus(e.message || 'Not found', 'danger');
     }
   });
+  
+  (function initBoardSizeSelect() {
+    const sel = document.getElementById('size');
+    if (!sel || sel.tagName !== 'SELECT') return;
+    sel.innerHTML = '';
+    for (let n = 5; n <= 49; n++) {
+      const opt = document.createElement('option');
+      opt.value = String(n);
+      opt.textContent = String(n);
+      if (n === 19) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  })();
 
   refresh();
 </script>
